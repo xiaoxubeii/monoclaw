@@ -494,6 +494,48 @@ function buildArtifactSummaries(team: VirtualTeam, tasks: TeamTask[], copy: Team
     }));
 }
 
+function summarizeCollaborativeProgress(tasks: TeamTask[], goalId: string): {
+  completedSteps: number;
+  totalSteps: number | null;
+  currentStep: number;
+} {
+  const children = tasks.filter((task) => (
+    task.collaboration?.goalId === goalId
+    && task.collaboration?.isRoot === false
+  ));
+
+  let maxObservedStep = 0;
+  let maxTotalSteps = 0;
+  const completedStepSet = new Set<number>();
+
+  for (const task of children) {
+    const step = task.collaboration?.step;
+    if (typeof step === 'number' && Number.isFinite(step) && step > 0) {
+      maxObservedStep = Math.max(maxObservedStep, step);
+      if (task.status === 'completed') {
+        completedStepSet.add(step);
+      }
+    }
+
+    const total = task.collaboration?.totalSteps;
+    if (typeof total === 'number' && Number.isFinite(total) && total > 0) {
+      maxTotalSteps = Math.max(maxTotalSteps, total);
+    }
+  }
+
+  const completedSteps = completedStepSet.size;
+  const totalSteps = maxTotalSteps > 0 ? maxTotalSteps : null;
+  const currentStep = totalSteps
+    ? Math.min(totalSteps, Math.max(maxObservedStep, completedSteps))
+    : Math.max(maxObservedStep, completedSteps);
+
+  return {
+    completedSteps,
+    totalSteps,
+    currentStep,
+  };
+}
+
 export function Teams() {
   const { teamId: routeTeamId } = useParams<{ teamId?: string }>();
   const navigate = useNavigate();
@@ -519,6 +561,7 @@ export function Teams() {
     hibernateTeam,
     dissolveTeam,
     dispatchTask,
+    interveneTask,
     clearError,
   } = useTeamStore();
 
@@ -553,10 +596,11 @@ export function Teams() {
   const [teamDefaultCollaborationProtocol, setTeamDefaultCollaborationProtocol] = useState<CollaborationProtocol>('native');
   const [taskProtocolOverrideEnabled, setTaskProtocolOverrideEnabled] = useState(false);
   const [taskCollaborationProtocol, setTaskCollaborationProtocol] = useState<CollaborationProtocol>('native');
+  const [interventionNote, setInterventionNote] = useState('');
   const [roomSidebarView, setRoomSidebarView] = useState<TeamRoomSidebarView>('participants');
   const [roomFullscreen, setRoomFullscreen] = useState(false);
   const [feishuChannelConnected, setFeishuChannelConnected] = useState(false);
-  const [pendingAction, setPendingAction] = useState<'none' | 'start' | 'hibernate' | 'dispatch' | 'saveTeam'>('none');
+  const [pendingAction, setPendingAction] = useState<'none' | 'start' | 'hibernate' | 'dispatch' | 'intervene' | 'saveTeam'>('none');
   const [teamToDissolve, setTeamToDissolve] = useState<VirtualTeam | null>(null);
 
   useEffect(() => {
@@ -951,6 +995,30 @@ export function Teams() {
     }
   };
 
+  const onInterveneTask = async () => {
+    if (!selectedTeam) return;
+    if (!focusCollaborativeTask) return;
+    const note = interventionNote.trim();
+    if (!note) {
+      toast.error(t('detail.intervention.noteRequired', { defaultValue: 'Please provide intervention notes first.' }));
+      return;
+    }
+
+    setPendingAction('intervene');
+    try {
+      await interveneTask(selectedTeam.id, {
+        rootTaskId: focusCollaborativeTask.id,
+        note,
+      });
+      setInterventionNote('');
+      toast.success(t('detail.intervention.submitted', { defaultValue: 'Intervention submitted. The team is resuming.' }));
+    } catch (actionError) {
+      toast.error(String(actionError));
+    } finally {
+      setPendingAction('none');
+    }
+  };
+
   const renderRoleStatus = (roleId: string) => {
     const runtimeRole = runtime?.roles.find((item) => item.roleId === roleId);
     const status = runtimeRole?.status ?? 'stopped';
@@ -1272,6 +1340,83 @@ export function Teams() {
     () => [...visibleTasksByNewest].slice(0, 4),
     [visibleTasksByNewest],
   );
+
+  const collaborativeRootTasks = [...tasks]
+    .filter((task) => task.collaboration?.enabled && task.collaboration?.isRoot === true)
+    .sort((left, right) => {
+      const rightTime = new Date(right.requestedAt).getTime();
+      const leftTime = new Date(left.requestedAt).getTime();
+      return rightTime - leftTime;
+    });
+  const awaitingInterventionTask = collaborativeRootTasks.find((task) => (
+    task.status === 'running' && task.collaboration?.awaitingIntervention
+  ));
+  const focusCollaborativeTask = awaitingInterventionTask
+    || collaborativeRootTasks.find((task) => task.status === 'running')
+    || collaborativeRootTasks[0]
+    || null;
+  const focusCollaboration = focusCollaborativeTask?.collaboration;
+  const focusProgress = focusCollaboration?.goalId
+    ? summarizeCollaborativeProgress(tasks, focusCollaboration.goalId)
+    : null;
+  const focusNeedsIntervention = Boolean(focusCollaboration?.awaitingIntervention);
+  const focusStatusText = (() => {
+    if (!focusCollaborativeTask) {
+      return t('detail.intervention.noMission', { defaultValue: 'No collaborative mission yet.' });
+    }
+    if (focusNeedsIntervention) {
+      return t('detail.intervention.currentBlocked', {
+        defaultValue: 'Blocked: {{reason}}',
+        reason: focusCollaboration?.interventionMessage || t('detail.intervention.waitingInput', { defaultValue: 'Waiting for user input' }),
+      });
+    }
+    if (focusCollaborativeTask.status === 'completed') {
+      return t('detail.intervention.currentCompleted', { defaultValue: 'Completed.' });
+    }
+    if (focusCollaborativeTask.status === 'failed') {
+      return t('detail.intervention.currentFailed', { defaultValue: 'Failed.' });
+    }
+    if (focusCollaborativeTask.status === 'queued') {
+      return t('detail.intervention.currentQueued', { defaultValue: 'Queued and waiting to start.' });
+    }
+    return t('detail.intervention.currentRunning', { defaultValue: 'Processing.' });
+  })();
+  const focusInterventionText = focusNeedsIntervention
+    ? t('detail.intervention.needYes', { defaultValue: 'Need your confirmation now.' })
+    : t('detail.intervention.needNo', { defaultValue: 'No intervention needed.' });
+  const focusEtaText = (() => {
+    if (!focusCollaborativeTask) {
+      return t('detail.intervention.etaUnknown', { defaultValue: 'No estimate yet.' });
+    }
+    if (focusCollaborativeTask.status === 'completed') {
+      return t('detail.intervention.etaDone', { defaultValue: 'Done.' });
+    }
+    if (focusCollaborativeTask.status === 'failed') {
+      return t('detail.intervention.etaFailed', { defaultValue: 'Stopped due to failure.' });
+    }
+    if (focusNeedsIntervention) {
+      if (focusProgress?.totalSteps) {
+        return t('detail.intervention.etaBlockedProgress', {
+          defaultValue: 'At step {{current}} / {{total}}. Will continue after intervention.',
+          current: focusProgress.currentStep,
+          total: focusProgress.totalSteps,
+        });
+      }
+      return t('detail.intervention.etaBlocked', { defaultValue: 'Waiting for intervention to continue.' });
+    }
+    if (focusProgress?.totalSteps) {
+      return t('detail.intervention.etaProgress', {
+        defaultValue: 'Progress {{completed}} / {{total}}.',
+        completed: focusProgress.completedSteps,
+        total: focusProgress.totalSteps,
+      });
+    }
+    return t('detail.intervention.etaSoon', { defaultValue: 'Short wait for the next stage result.' });
+  })();
+
+  useEffect(() => {
+    setInterventionNote('');
+  }, [focusCollaborativeTask?.id]);
 
   const formatBindingLabel = (binding: string) => {
     const normalized = binding.toLowerCase();
@@ -2003,6 +2148,54 @@ export function Teams() {
                     <div className="sticky bottom-0 shrink-0 border-t border-border/70 bg-background/35 px-5 py-4">
                       <div className="rounded-3xl bg-background/70 p-4 shadow-[0_24px_70px_-40px_rgba(56,189,248,0.35)]">
                         <div className="space-y-3">
+                        {focusCollaborativeTask && (
+                          <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-[0_20px_60px_-42px_rgba(56,189,248,0.35)]">
+                            <div className="grid gap-3 md:grid-cols-3">
+                              <div className={cn(teamsPanelClass, 'space-y-1 p-3')}>
+                                <p className="text-xs text-muted-foreground">{t('detail.intervention.currentLabel', { defaultValue: 'Now' })}</p>
+                                <p className="text-sm font-medium">{focusStatusText}</p>
+                              </div>
+                              <div className={cn(teamsPanelClass, 'space-y-1 p-3')}>
+                                <p className="text-xs text-muted-foreground">{t('detail.intervention.needLabel', { defaultValue: 'Need me?' })}</p>
+                                <p className={cn('text-sm font-medium', focusNeedsIntervention && 'text-amber-300')}>{focusInterventionText}</p>
+                              </div>
+                              <div className={cn(teamsPanelClass, 'space-y-1 p-3')}>
+                                <p className="text-xs text-muted-foreground">{t('detail.intervention.etaLabel', { defaultValue: 'ETA' })}</p>
+                                <p className="text-sm font-medium">{focusEtaText}</p>
+                              </div>
+                            </div>
+
+                            {focusNeedsIntervention && (
+                              <div className="mt-3 space-y-2">
+                                <Label>{t('detail.intervention.noteLabel', { defaultValue: 'Intervention note' })}</Label>
+                                <Textarea
+                                  rows={3}
+                                  value={interventionNote}
+                                  onChange={(event) => setInterventionNote(event.target.value)}
+                                  placeholder={t('detail.intervention.notePlaceholder', {
+                                    defaultValue: 'Example: Confirm economy class, depart after 18:00, budget under $300.',
+                                  })}
+                                  className="border-border/70 bg-background/60"
+                                />
+                                <div className="flex items-center justify-between gap-3">
+                                  <p className="text-xs text-muted-foreground">
+                                    {focusCollaboration?.interventionMessage || t('detail.intervention.waitingInput', { defaultValue: 'Waiting for user input' })}
+                                  </p>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => void onInterveneTask()}
+                                    disabled={pendingAction !== 'none' || !interventionNote.trim()}
+                                  >
+                                    {t('detail.intervention.submit', { defaultValue: 'Submit intervention' })}
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        <div className="rounded-3xl border border-border/70 bg-background/70 p-4 shadow-[0_24px_70px_-40px_rgba(56,189,248,0.35)]">
+                          <div className="space-y-3">
                           <div className="space-y-2">
                             <Label>{t('dispatch.taskInput')}</Label>
                             <Textarea

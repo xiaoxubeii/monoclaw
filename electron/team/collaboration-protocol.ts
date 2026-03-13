@@ -20,12 +20,22 @@ export interface RoleCollaborationInteraction {
   meta?: Record<string, string>;
 }
 
+export interface RoleCollaborationFlowNode extends RoleCollaborationInteraction {
+  dependsOn: string[];
+}
+
+export interface RoleCollaborationFlow {
+  protocol: CollaborationProtocol;
+  nodes: RoleCollaborationFlowNode[];
+}
+
 export interface RoleCollaborationPlan {
   goalId: string;
   protocol: CollaborationProtocol;
   coordinatorRoleId: string;
   roleSequence: string[];
   interactions: RoleCollaborationInteraction[];
+  flow: RoleCollaborationFlow;
 }
 
 interface BuildCollaborationPlanInput {
@@ -105,6 +115,80 @@ function addInteraction(
   });
 }
 
+function uniqueValues(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function buildInteractionFlow(
+  protocol: CollaborationProtocol,
+  interactions: RoleCollaborationInteraction[],
+): RoleCollaborationFlow {
+  const clarifyIds = interactions
+    .filter((item) => item.intent === 'clarify')
+    .map((item) => item.id);
+  const handoffByRoleId = new Map<string, string>();
+  const handoffIds: string[] = [];
+  const reviewIds: string[] = [];
+
+  for (const item of interactions) {
+    if (item.intent === 'handoff') {
+      handoffByRoleId.set(item.toRoleId, item.id);
+      handoffIds.push(item.id);
+    }
+    if (item.intent === 'review') {
+      reviewIds.push(item.id);
+    }
+  }
+
+  const nodes: RoleCollaborationFlowNode[] = interactions.map((item) => {
+    if (item.intent === 'clarify') {
+      return { ...item, dependsOn: [] };
+    }
+
+    if (item.intent === 'handoff') {
+      return { ...item, dependsOn: [...clarifyIds] };
+    }
+
+    if (item.intent === 'review') {
+      const matchedHandoffId = handoffByRoleId.get(item.fromRoleId);
+      return {
+        ...item,
+        dependsOn: uniqueValues(matchedHandoffId ? [matchedHandoffId] : [...clarifyIds]),
+      };
+    }
+
+    // complete
+    const completeDepends = (() => {
+      if (protocol === 'native') {
+        return handoffIds.length > 0 ? handoffIds : clarifyIds;
+      }
+      if (reviewIds.length > 0) {
+        return reviewIds;
+      }
+      if (handoffIds.length > 0) {
+        return handoffIds;
+      }
+      return clarifyIds;
+    })();
+    return {
+      ...item,
+      dependsOn: uniqueValues(completeDepends),
+    };
+  });
+
+  return {
+    protocol,
+    nodes,
+  };
+}
+
 export function buildRoleCollaborationPlan(input: BuildCollaborationPlanInput): RoleCollaborationPlan {
   const protocol = resolveProtocol(input.team, input.protocol);
   const enabledRoles = input.team.roles.filter((role) => role.enabled);
@@ -172,5 +256,6 @@ export function buildRoleCollaborationPlan(input: BuildCollaborationPlanInput): 
     coordinatorRoleId: coordinator.id,
     roleSequence,
     interactions,
+    flow: buildInteractionFlow(protocol, interactions),
   };
 }
