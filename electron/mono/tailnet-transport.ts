@@ -1,14 +1,14 @@
 import { EventEmitter } from 'node:events';
 import net from 'node:net';
-import type { MonoHandshakeFrame } from '@mono/types';
+import type { MonoFrame } from '@mono/types';
 import { decodeFrame, encodeFrame } from '@mono/protocol';
 
 export class TailnetJsonConnection extends EventEmitter {
   private readonly socket: net.Socket;
   private buffer = '';
-  private readonly frameQueue: MonoHandshakeFrame[] = [];
+  private readonly frameQueue: MonoFrame[] = [];
   private readonly waiters: Array<{
-    resolve: (frame: MonoHandshakeFrame) => void;
+    resolve: (frame: MonoFrame) => void;
     reject: (error: Error) => void;
     timer: NodeJS.Timeout;
   }> = [];
@@ -26,7 +26,11 @@ export class TailnetJsonConnection extends EventEmitter {
     return this.socket.remoteAddress ?? undefined;
   }
 
-  async sendFrame(frame: MonoHandshakeFrame): Promise<void> {
+  get remotePort(): number | undefined {
+    return this.socket.remotePort ?? undefined;
+  }
+
+  async sendFrame(frame: MonoFrame): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       this.socket.write(encodeFrame(frame), (error) => {
         if (error) {
@@ -38,16 +42,16 @@ export class TailnetJsonConnection extends EventEmitter {
     });
   }
 
-  async nextFrame(timeoutMs = 10000): Promise<MonoHandshakeFrame> {
+  async nextFrame(timeoutMs = 10000): Promise<MonoFrame> {
     const queued = this.frameQueue.shift();
     if (queued) {
       return queued;
     }
 
-    return new Promise<MonoHandshakeFrame>((resolve, reject) => {
+    return new Promise<MonoFrame>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.removeWaiter(resolve);
-        reject(new Error(`Timed out waiting for mono handshake frame after ${timeoutMs}ms`));
+        reject(new Error(`Timed out waiting for mono frame after ${timeoutMs}ms`));
       }, timeoutMs);
       this.waiters.push({ resolve, reject, timer });
     });
@@ -58,7 +62,7 @@ export class TailnetJsonConnection extends EventEmitter {
     this.socket.destroy();
   }
 
-  private removeWaiter(resolve: (frame: MonoHandshakeFrame) => void): void {
+  private removeWaiter(resolve: (frame: MonoFrame) => void): void {
     const index = this.waiters.findIndex((waiter) => waiter.resolve === resolve);
     if (index >= 0) {
       const [waiter] = this.waiters.splice(index, 1);
@@ -75,7 +79,18 @@ export class TailnetJsonConnection extends EventEmitter {
       this.buffer = this.buffer.slice(delimiterIndex + 1);
       if (!rawLine) continue;
 
-      const frame = decodeFrame(rawLine);
+      let frame: MonoFrame;
+      try {
+        frame = decodeFrame(rawLine);
+      } catch (error) {
+        const decodeError = error instanceof Error
+          ? error
+          : new Error(String(error));
+        this.failWaiters(decodeError);
+        this.emit('error', decodeError);
+        this.close();
+        return;
+      }
       const waiter = this.waiters.shift();
       if (waiter) {
         clearTimeout(waiter.timer);

@@ -2253,6 +2253,8 @@ export function Teams() {
                         </div>
                       </div>
                     </div>
+                    </div>
+                  </div>
                   </CardContent>
                 </Card>
 

@@ -93,6 +93,7 @@ import {
 } from '../utils/assistant-data-paths';
 import { checkManagedOpenClawDrift } from '../utils/assistant-openclaw-control';
 import { MonoConnectService } from '../mono/peer-service';
+import type { MonoInvokePeerAgentInput, MonoPeerPolicyPatch } from '@mono/types';
 
 /**
  * For custom/ollama providers, derive a unique key for OpenClaw config files
@@ -231,9 +232,9 @@ function getOpsOrchestrator(
   return opsOrchestratorSingleton;
 }
 
-function getMonoConnectService(): MonoConnectService {
+function getMonoConnectService(gatewayRpc: TeamGatewayRpc): MonoConnectService {
   if (!monoConnectServiceSingleton) {
-    monoConnectServiceSingleton = new MonoConnectService();
+    monoConnectServiceSingleton = new MonoConnectService(gatewayRpc);
   }
   return monoConnectServiceSingleton;
 }
@@ -259,7 +260,7 @@ export function registerIpcHandlers(
   };
   const teamOrchestrator = getTeamOrchestrator(teamGatewayRpc);
   const opsOrchestrator = getOpsOrchestrator(gatewayManager, teamOrchestrator, localModelManager);
-  const monoConnectService = getMonoConnectService();
+  const monoConnectService = getMonoConnectService(teamGatewayRpc);
 
   // Gateway handlers
   registerGatewayHandlers(gatewayManager, mainWindow, localModelManager);
@@ -2744,6 +2745,39 @@ function registerMonoHandlers(monoConnectService: MonoConnectService): void {
   ipcMain.handle('mono:revokeTrust', async (_, did: string) => {
     try {
       await monoConnectService.revokeTrust(did);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('mono:getPeerPolicy', async (_, did: string) => {
+    try {
+      return { success: true, data: await monoConnectService.getPeerPolicy(did) };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('mono:setPeerPolicy', async (_, did: string, patch: unknown) => {
+    try {
+      return { success: true, data: await monoConnectService.setPeerPolicy(did, patch as MonoPeerPolicyPatch) };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('mono:invokePeerAgent', async (_, payload: unknown) => {
+    try {
+      return { success: true, data: await monoConnectService.invokePeerAgent(payload as MonoInvokePeerAgentInput) };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('mono:disconnectPeer', async (_, did: string) => {
+    try {
+      monoConnectService.disconnectPeer(did);
       return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };

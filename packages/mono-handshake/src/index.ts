@@ -5,9 +5,11 @@ import {
   verifyPayload,
 } from '@mono/identity';
 import type {
+  MonoFrame,
   MonoHandshakeChallengeFrame,
   MonoHandshakeFrame,
   MonoHandshakeHelloFrame,
+  MonoHandshakeResponseFrame,
   MonoLocalIdentityRecord,
 } from '@mono/types';
 
@@ -145,7 +147,7 @@ export function verifyClientResponseFrame(input: {
 }
 
 export function assertHandshakeFrameType<T extends MonoHandshakeFrame['type']>(
-  frame: MonoHandshakeFrame,
+  frame: MonoFrame,
   type: T,
 ): asserts frame is Extract<MonoHandshakeFrame, { type: T }> {
   if (frame.type !== type) {

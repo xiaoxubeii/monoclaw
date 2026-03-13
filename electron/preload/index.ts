@@ -167,6 +167,10 @@ const electronAPI = {
         'mono:createInvitation',
         'mono:connectWithInvitation',
         'mono:revokeTrust',
+        'mono:getPeerPolicy',
+        'mono:setPeerPolicy',
+        'mono:invokePeerAgent',
+        'mono:disconnectPeer',
         // Virtual teams
         'team:listTemplates',
         'team:list',

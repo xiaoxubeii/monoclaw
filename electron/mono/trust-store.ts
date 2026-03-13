@@ -30,6 +30,11 @@ export class MonoTrustStore {
     return [...records].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
+  async getByDid(did: string): Promise<MonoTrustRecord | null> {
+    const records = await this.list();
+    return records.find((record) => record.did === did) ?? null;
+  }
+
   async upsertVerifiedRecord(input: UpsertTrustRecordInput): Promise<MonoTrustRecord> {
     const filePath = await this.getFilePath();
     const records = await this.list();

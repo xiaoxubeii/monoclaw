@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { MonoConnectStatus, MonoInvitation } from '@mono/types';
+import type {
+  MonoConnectStatus,
+  MonoInvitation,
+  MonoInvokePeerAgentInput,
+  MonoInvokePeerAgentResult,
+  MonoPeerPolicy,
+  MonoPeerPolicyMode,
+  MonoPeerPolicyPatch,
+} from '@mono/types';
 import * as QRCode from 'qrcode';
 
 interface MonoIpcResponse<T> {
@@ -9,6 +17,25 @@ interface MonoIpcResponse<T> {
 }
 
 const DEFAULT_LISTENER_PORT = 4120;
+const INVITATION_QR_OPTIONS = {
+  errorCorrectionLevel: 'M' as const,
+  margin: 1,
+  width: 280,
+};
+
+function parseCommaSeparated(value: string): string[] {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseLineSeparated(value: string): string[] {
+  return value
+    .split(/\r?\n/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 
 async function invokeMono<T>(channel: string, ...args: unknown[]): Promise<T> {
   const response = await window.electron.ipcRenderer.invoke(channel, ...args) as MonoIpcResponse<T>;
@@ -27,6 +54,23 @@ export function MonoConnect() {
   const [invitationQrDataUrl, setInvitationQrDataUrl] = useState<string | null>(null);
   const [invitationQrError, setInvitationQrError] = useState<string | null>(null);
   const [remoteInvitation, setRemoteInvitation] = useState('');
+
+  const [selectedPeerDid, setSelectedPeerDid] = useState('');
+  const [policyMode, setPolicyMode] = useState<MonoPeerPolicyMode>('ask');
+  const [policyTools, setPolicyTools] = useState('');
+  const [policyRoots, setPolicyRoots] = useState('');
+  const [policyRpm, setPolicyRpm] = useState('6');
+  const [policyMaxInputChars, setPolicyMaxInputChars] = useState('8000');
+  const [policyMaxTokens, setPolicyMaxTokens] = useState('2048');
+  const [policyTimeoutMs, setPolicyTimeoutMs] = useState('90000');
+
+  const [invokePrompt, setInvokePrompt] = useState('');
+  const [invokeTools, setInvokeTools] = useState('');
+  const [invokeFiles, setInvokeFiles] = useState('');
+  const [invokeMaxTokens, setInvokeMaxTokens] = useState('512');
+  const [invokeTimeoutMs, setInvokeTimeoutMs] = useState('60000');
+  const [invokeResult, setInvokeResult] = useState<MonoInvokePeerAgentResult | null>(null);
+
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +79,21 @@ export function MonoConnect() {
     if (!status?.listener.running || !status.listener.port) return 'stopped';
     return `listening on ${status.listener.port}`;
   }, [status]);
+
+  const verifiedPeers = useMemo(
+    () => (status?.trustRecords ?? []).filter((peer) => peer.state === 'verified'),
+    [status?.trustRecords],
+  );
+
+  const selectedPolicy = useMemo(
+    () => status?.peerPolicies.find((policy) => policy.did === selectedPeerDid) ?? null,
+    [selectedPeerDid, status?.peerPolicies],
+  );
+
+  const selectedSession = useMemo(
+    () => status?.activeSessions.find((session) => session.did === selectedPeerDid) ?? null,
+    [selectedPeerDid, status?.activeSessions],
+  );
 
   const refreshStatus = async () => {
     try {
@@ -51,6 +110,25 @@ export function MonoConnect() {
   }, []);
 
   useEffect(() => {
+    const exists = verifiedPeers.some((peer) => peer.did === selectedPeerDid);
+    if (exists) return;
+    setSelectedPeerDid(verifiedPeers[0]?.did ?? '');
+  }, [selectedPeerDid, verifiedPeers]);
+
+  useEffect(() => {
+    if (!selectedPeerDid) return;
+
+    const policy = selectedPolicy;
+    setPolicyMode(policy?.mode ?? 'ask');
+    setPolicyTools((policy?.allowedTools ?? []).join(', '));
+    setPolicyRoots((policy?.allowedFileRoots ?? []).join('\n'));
+    setPolicyRpm(String(policy?.limits.requestsPerMinute ?? 6));
+    setPolicyMaxInputChars(String(policy?.limits.maxInputChars ?? 8000));
+    setPolicyMaxTokens(String(policy?.limits.maxTokens ?? 2048));
+    setPolicyTimeoutMs(String(policy?.limits.timeoutMs ?? 90000));
+  }, [selectedPeerDid, selectedPolicy]);
+
+  useEffect(() => {
     let cancelled = false;
     const payload = invitation.trim();
 
@@ -62,11 +140,7 @@ export function MonoConnect() {
       };
     }
 
-    void QRCode.toDataURL(payload, {
-      errorCorrectionLevel: 'M',
-      margin: 1,
-      width: 280,
-    }).then((dataUrl) => {
+    void QRCode.toDataURL(payload, INVITATION_QR_OPTIONS).then((dataUrl) => {
       if (cancelled) return;
       setInvitationQrDataUrl(dataUrl);
       setInvitationQrError(null);
@@ -113,7 +187,10 @@ export function MonoConnect() {
     await runAction('invitation', async () => {
       const nextInvitation = await invokeMono<MonoInvitation>('mono:createInvitation');
       const encoded = JSON.stringify(nextInvitation, null, 2);
+      const qrDataUrl = await QRCode.toDataURL(encoded, INVITATION_QR_OPTIONS);
       setInvitation(encoded);
+      setInvitationQrDataUrl(qrDataUrl);
+      setInvitationQrError(null);
       setMessage(`Invitation created via tailnet (${nextInvitation.transport.host}:${nextInvitation.transport.port}). Share it out-of-band.`);
     });
   };
@@ -130,8 +207,10 @@ export function MonoConnect() {
       if (!payload) {
         throw new Error('Paste a remote invitation before connecting.');
       }
-      const result = await invokeMono<{ peer: { did: string }; connectionKind: string; transport: string }>('mono:connectWithInvitation', payload);
-      setMessage(`Mutual trust established with ${result.peer.did} via ${result.transport} (${result.connectionKind})`);
+      const result = await invokeMono<{ peer: { did: string }; connectionKind: string; transport: string; reusedSession: boolean }>('mono:connectWithInvitation', payload);
+      setMessage(
+        `Mutual trust established with ${result.peer.did} via ${result.transport} (${result.connectionKind})${result.reusedSession ? ' [session reused]' : ''}`,
+      );
       setRemoteInvitation('');
     });
   };
@@ -143,6 +222,71 @@ export function MonoConnect() {
         throw new Error(response.error || `Failed to revoke trust for ${did}`);
       }
       setMessage(`Revoked trust for ${did}`);
+      if (selectedPeerDid === did) {
+        setSelectedPeerDid('');
+      }
+    });
+  };
+
+  const handleDisconnectPeer = async (did: string) => {
+    await runAction('disconnect', async () => {
+      const response = await window.electron.ipcRenderer.invoke('mono:disconnectPeer', did) as MonoIpcResponse<null>;
+      if (!response.success) {
+        throw new Error(response.error || `Failed to disconnect peer session for ${did}`);
+      }
+      setMessage(`Disconnected active session for ${did}`);
+    });
+  };
+
+  const handleSavePolicy = async () => {
+    await runAction('policy', async () => {
+      if (!selectedPeerDid) {
+        throw new Error('Select a verified peer first.');
+      }
+
+      const patch: MonoPeerPolicyPatch = {
+        mode: policyMode,
+        scopes: ['agent.invoke'],
+        allowedTools: parseCommaSeparated(policyTools),
+        allowedFileRoots: parseLineSeparated(policyRoots),
+        limits: {
+          requestsPerMinute: Number(policyRpm),
+          maxInputChars: Number(policyMaxInputChars),
+          maxTokens: Number(policyMaxTokens),
+          timeoutMs: Number(policyTimeoutMs),
+        },
+      };
+
+      const saved = await invokeMono<MonoPeerPolicy>('mono:setPeerPolicy', selectedPeerDid, patch);
+      setMessage(`Policy updated for ${saved.did} (mode=${saved.mode})`);
+    });
+  };
+
+  const handleInvokePeer = async () => {
+    await runAction('invoke', async () => {
+      if (!selectedPeerDid) {
+        throw new Error('Select a verified peer first.');
+      }
+
+      const prompt = invokePrompt.trim();
+      if (!prompt) {
+        throw new Error('Enter a prompt before invoking remote peer agent.');
+      }
+
+      const payload: MonoInvokePeerAgentInput = {
+        peerDid: selectedPeerDid,
+        task: {
+          prompt,
+          requestedTools: parseCommaSeparated(invokeTools),
+          requestedFiles: parseLineSeparated(invokeFiles),
+          maxTokens: Number.isFinite(Number(invokeMaxTokens)) ? Number(invokeMaxTokens) : undefined,
+          timeoutMs: Number.isFinite(Number(invokeTimeoutMs)) ? Number(invokeTimeoutMs) : undefined,
+        },
+      };
+
+      const result = await invokeMono<MonoInvokePeerAgentResult>('mono:invokePeerAgent', payload);
+      setInvokeResult(result);
+      setMessage(`Remote agent call completed from ${result.peerDid} in ${result.durationMs}ms (${result.reusedSession ? 'session reused' : 'new session'})`);
     });
   };
 
@@ -236,6 +380,14 @@ export function MonoConnect() {
                 {status?.tailnet.self?.tailnetIps.join(', ') || 'No tailnet address detected'}
               </div>
             </div>
+            <div className="rounded-2xl bg-background/80 p-4">
+              <div className="text-muted-foreground">Active sessions</div>
+              <div className="mt-2 text-xs">
+                {(status?.activeSessions.length ?? 0) === 0
+                  ? 'No active peer sessions'
+                  : `${status?.activeSessions.length ?? 0} sessions live`}
+              </div>
+            </div>
             <div className="flex flex-wrap gap-3">
               <button
                 type="button"
@@ -271,7 +423,7 @@ export function MonoConnect() {
               disabled={busy !== null}
               className="rounded-xl bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-50"
             >
-              Create invitation
+              {busy === 'invitation' ? 'Creating invitation...' : 'Create invitation'}
             </button>
           </div>
           <textarea
@@ -335,6 +487,224 @@ export function MonoConnect() {
             >
               Run mutual handshake
             </button>
+          </div>
+        </section>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <section className="rounded-3xl border border-border/70 bg-card/80 p-6 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-semibold">Peer policy</h2>
+              <p className="text-sm text-muted-foreground">Task-level permission guard for tools, file roots and token/time limits.</p>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-3 text-sm">
+            <label className="block">
+              <span className="text-muted-foreground">Peer DID</span>
+              <select
+                value={selectedPeerDid}
+                onChange={(event) => setSelectedPeerDid(event.target.value)}
+                className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-xs font-mono"
+              >
+                <option value="">Select a verified peer</option>
+                {verifiedPeers.map((peer) => (
+                  <option key={peer.did} value={peer.did}>{peer.did}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block">
+              <span className="text-muted-foreground">Mode</span>
+              <select
+                value={policyMode}
+                onChange={(event) => setPolicyMode(event.target.value as MonoPeerPolicyMode)}
+                disabled={!selectedPeerDid}
+                className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2"
+              >
+                <option value="allow">allow</option>
+                <option value="ask">ask</option>
+                <option value="deny">deny</option>
+              </select>
+            </label>
+
+            <label className="block">
+              <span className="text-muted-foreground">Allowed tools (comma separated, `*` for any)</span>
+              <input
+                value={policyTools}
+                onChange={(event) => setPolicyTools(event.target.value)}
+                disabled={!selectedPeerDid}
+                className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2"
+                placeholder="shell.exec, git.run"
+              />
+            </label>
+
+            <label className="block">
+              <span className="text-muted-foreground">Allowed file roots (one absolute path per line)</span>
+              <textarea
+                value={policyRoots}
+                onChange={(event) => setPolicyRoots(event.target.value)}
+                disabled={!selectedPeerDid}
+                className="mt-1 min-h-[92px] w-full rounded-xl border border-border bg-background px-3 py-2 font-mono text-xs"
+                placeholder="/Users/xiaoxubeii/workspace/monoclaw"
+              />
+            </label>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block">
+                <span className="text-muted-foreground">RPM</span>
+                <input
+                  type="number"
+                  value={policyRpm}
+                  onChange={(event) => setPolicyRpm(event.target.value)}
+                  disabled={!selectedPeerDid}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2"
+                />
+              </label>
+              <label className="block">
+                <span className="text-muted-foreground">Max input chars</span>
+                <input
+                  type="number"
+                  value={policyMaxInputChars}
+                  onChange={(event) => setPolicyMaxInputChars(event.target.value)}
+                  disabled={!selectedPeerDid}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2"
+                />
+              </label>
+              <label className="block">
+                <span className="text-muted-foreground">Max tokens</span>
+                <input
+                  type="number"
+                  value={policyMaxTokens}
+                  onChange={(event) => setPolicyMaxTokens(event.target.value)}
+                  disabled={!selectedPeerDid}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2"
+                />
+              </label>
+              <label className="block">
+                <span className="text-muted-foreground">Timeout ms</span>
+                <input
+                  type="number"
+                  value={policyTimeoutMs}
+                  onChange={(event) => setPolicyTimeoutMs(event.target.value)}
+                  disabled={!selectedPeerDid}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2"
+                />
+              </label>
+            </div>
+
+            {selectedSession ? (
+              <div className="rounded-xl border border-border/70 bg-background/60 p-3 text-xs text-muted-foreground">
+                Active session: {selectedSession.host}:{selectedSession.port} · {selectedSession.connectionKind} · pending {selectedSession.pendingRequests}
+              </div>
+            ) : null}
+
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => { if (selectedPeerDid) void handleDisconnectPeer(selectedPeerDid); }}
+                disabled={!selectedPeerDid || busy !== null}
+                className="rounded-xl border border-border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+              >
+                Disconnect session
+              </button>
+              <button
+                type="button"
+                onClick={() => { void handleSavePolicy(); }}
+                disabled={!selectedPeerDid || busy !== null}
+                className="rounded-xl bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-50"
+              >
+                Save policy
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-border/70 bg-card/80 p-6 shadow-sm">
+          <div>
+            <h2 className="text-xl font-semibold">Invoke remote peer agent</h2>
+            <p className="text-sm text-muted-foreground">Long-lived sessions are reused and requests are multiplexed by request ID.</p>
+          </div>
+
+          <div className="mt-4 space-y-3 text-sm">
+            <label className="block">
+              <span className="text-muted-foreground">Task prompt</span>
+              <textarea
+                value={invokePrompt}
+                onChange={(event) => setInvokePrompt(event.target.value)}
+                disabled={!selectedPeerDid}
+                className="mt-1 min-h-[140px] w-full rounded-xl border border-border bg-background px-3 py-2"
+                placeholder="Ask the remote mono to summarize the latest project status."
+              />
+            </label>
+
+            <label className="block">
+              <span className="text-muted-foreground">Requested tools (comma separated)</span>
+              <input
+                value={invokeTools}
+                onChange={(event) => setInvokeTools(event.target.value)}
+                disabled={!selectedPeerDid}
+                className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2"
+                placeholder="shell.exec"
+              />
+            </label>
+
+            <label className="block">
+              <span className="text-muted-foreground">Requested files (one absolute path per line)</span>
+              <textarea
+                value={invokeFiles}
+                onChange={(event) => setInvokeFiles(event.target.value)}
+                disabled={!selectedPeerDid}
+                className="mt-1 min-h-[92px] w-full rounded-xl border border-border bg-background px-3 py-2 font-mono text-xs"
+                placeholder="/Users/xiaoxubeii/workspace/monoclaw/README.md"
+              />
+            </label>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block">
+                <span className="text-muted-foreground">Max tokens</span>
+                <input
+                  type="number"
+                  value={invokeMaxTokens}
+                  onChange={(event) => setInvokeMaxTokens(event.target.value)}
+                  disabled={!selectedPeerDid}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2"
+                />
+              </label>
+              <label className="block">
+                <span className="text-muted-foreground">Timeout ms</span>
+                <input
+                  type="number"
+                  value={invokeTimeoutMs}
+                  onChange={(event) => setInvokeTimeoutMs(event.target.value)}
+                  disabled={!selectedPeerDid}
+                  className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2"
+                />
+              </label>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => { void handleInvokePeer(); }}
+                disabled={!selectedPeerDid || busy !== null}
+                className="rounded-xl bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-50"
+              >
+                Invoke remote agent
+              </button>
+            </div>
+
+            {invokeResult ? (
+              <div className="rounded-2xl border border-border bg-background/70 p-4">
+                <div className="text-xs text-muted-foreground">
+                  request={invokeResult.requestId} · duration={invokeResult.durationMs}ms · {invokeResult.reusedSession ? 'session reused' : 'new session'}
+                </div>
+                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap rounded-xl bg-background p-3 text-xs">
+                  {invokeResult.output || '(empty output)'}
+                </pre>
+              </div>
+            ) : null}
           </div>
         </section>
       </div>

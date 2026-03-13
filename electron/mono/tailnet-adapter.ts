@@ -15,11 +15,28 @@ interface TailscaleStatusJson {
   Peer?: Record<string, TailscaleStatusNode>;
 }
 
-function runTailscaleCommand(args: string[]): Promise<string> {
+const DEFAULT_TAILSCALE_TIMEOUT_MS = 8000;
+
+function runTailscaleCommand(args: string[], timeoutMs = DEFAULT_TAILSCALE_TIMEOUT_MS): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn('tailscale', args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGTERM');
+      reject(new Error(`tailscale ${args.join(' ')} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    timer.unref();
+
+    const finish = (handler: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      handler();
+    };
 
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString();
@@ -30,15 +47,17 @@ function runTailscaleCommand(args: string[]): Promise<string> {
     });
 
     child.on('error', (error) => {
-      reject(error);
+      finish(() => reject(error));
     });
 
     child.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(stderr.trim() || `tailscale ${args.join(' ')} exited with code ${code}`));
-        return;
-      }
-      resolve(stdout.trim());
+      finish(() => {
+        if (code !== 0) {
+          reject(new Error(stderr.trim() || `tailscale ${args.join(' ')} exited with code ${code}`));
+          return;
+        }
+        resolve(stdout.trim());
+      });
     });
   });
 }
