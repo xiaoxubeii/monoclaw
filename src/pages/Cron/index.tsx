@@ -7,7 +7,6 @@ import {
   Plus,
   Clock,
   Play,
-  Pause,
   Trash2,
   Edit,
   RefreshCw,
@@ -29,10 +28,18 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { SummaryTile } from '@/components/control/SummaryTile';
 import { useCronStore } from '@/stores/cron';
 import { useGatewayStore } from '@/stores/gateway';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { formatRelativeTime, cn } from '@/lib/utils';
+import {
+  controlHeroAuraClass,
+  controlHeroCardClass,
+  controlPanelClass,
+  controlSummaryTileClass,
+  controlSurfaceCardClass,
+} from '@/pages/control/styles';
 import { toast } from 'sonner';
 import type { CronJob, CronJobCreateInput, ScheduleType } from '@/types/cron';
 import { CHANNEL_ICONS, type ChannelType } from '@/types/channel';
@@ -323,10 +330,7 @@ function CronJobCard({ job, onToggle, onEdit, onDelete, onTrigger }: CronJobCard
   };
 
   return (
-    <Card className={cn(
-      'transition-colors',
-      job.enabled && 'border-primary/30'
-    )}>
+    <Card className={cn(controlPanelClass, 'transition-colors', job.enabled && 'border-primary/30')}>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
@@ -362,7 +366,7 @@ function CronJobCard({ job, onToggle, onEdit, onDelete, onTrigger }: CronJobCard
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Message Preview */}
-        <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/50">
+        <div className="flex items-start gap-2 rounded-lg border border-border/60 bg-background/55 p-3">
           <MessageSquare className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
           <p className="text-sm text-muted-foreground line-clamp-2">
             {job.message}
@@ -487,34 +491,63 @@ export function Cron() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">{t('title')}</h1>
-          <p className="text-muted-foreground">
-            {t('subtitle')}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={fetchJobs} disabled={!isGatewayRunning}>
-            <RefreshCw className="h-4 w-4 mr-2" />
-            {t('refresh')}
-          </Button>
-          <Button
-            onClick={() => {
-              setEditingJob(undefined);
-              setShowDialog(true);
-            }}
-            disabled={!isGatewayRunning}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            {t('newTask')}
-          </Button>
-        </div>
-      </div>
+      <Card className={controlHeroCardClass}>
+        <div className={controlHeroAuraClass} />
+        <CardContent className="relative flex flex-col gap-5 p-6 xl:flex-row xl:items-end xl:justify-between">
+          <div className="space-y-3">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">{t('title')}</h1>
+              <p className="text-muted-foreground">{t('subtitle')}</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <SummaryTile
+                title={t('stats.total')}
+                value={jobs.length}
+                description={t('title')}
+                className={controlSummaryTileClass}
+              />
+              <SummaryTile
+                title={t('stats.active')}
+                value={activeJobs.length}
+                description={t('stats.active')}
+                className={controlSummaryTileClass}
+              />
+              <SummaryTile
+                title={t('stats.paused')}
+                value={pausedJobs.length}
+                description={t('stats.paused')}
+                className={controlSummaryTileClass}
+              />
+              <SummaryTile
+                title={t('stats.failed')}
+                value={failedJobs.length}
+                description={t('stats.failed')}
+                className={controlSummaryTileClass}
+              />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={fetchJobs} disabled={!isGatewayRunning}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              {t('refresh')}
+            </Button>
+            <Button
+              onClick={() => {
+                setEditingJob(undefined);
+                setShowDialog(true);
+              }}
+              disabled={!isGatewayRunning}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              {t('newTask')}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Gateway Warning */}
       {!isGatewayRunning && (
-        <Card className="border-yellow-500 bg-yellow-50 dark:bg-yellow-900/10">
+        <Card className="border-yellow-500/60 bg-yellow-500/[0.08] shadow-[0_20px_45px_-36px_rgba(234,179,8,0.5)]">
           <CardContent className="py-4 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-yellow-600" />
             <span className="text-yellow-700 dark:text-yellow-400">
@@ -524,65 +557,9 @@ export function Cron() {
         </Card>
       )}
 
-      {/* Statistics */}
-      <div className="grid grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-4">
-              <div className="rounded-full bg-primary/10 p-3">
-                <Clock className="h-6 w-6 text-primary" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{jobs.length}</p>
-                <p className="text-sm text-muted-foreground">{t('stats.total')}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-4">
-              <div className="rounded-full bg-green-100 p-3 dark:bg-green-900/30">
-                <Play className="h-6 w-6 text-green-600" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{activeJobs.length}</p>
-                <p className="text-sm text-muted-foreground">{t('stats.active')}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-4">
-              <div className="rounded-full bg-yellow-100 p-3 dark:bg-yellow-900/30">
-                <Pause className="h-6 w-6 text-yellow-600" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{pausedJobs.length}</p>
-                <p className="text-sm text-muted-foreground">{t('stats.paused')}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-4">
-              <div className="rounded-full bg-red-100 p-3 dark:bg-red-900/30">
-                <XCircle className="h-6 w-6 text-red-600" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{failedJobs.length}</p>
-                <p className="text-sm text-muted-foreground">{t('stats.failed')}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
       {/* Error Display */}
       {error && (
-        <Card className="border-destructive">
+        <Card className="border-destructive/70 bg-destructive/[0.08] shadow-[0_18px_45px_-34px_rgba(239,68,68,0.45)]">
           <CardContent className="py-4 text-destructive flex items-center gap-2">
             <AlertCircle className="h-5 w-5" />
             {error}
@@ -592,7 +569,7 @@ export function Cron() {
 
       {/* Jobs List */}
       {jobs.length === 0 ? (
-        <Card>
+        <Card className={controlSurfaceCardClass}>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Clock className="h-12 w-12 text-muted-foreground mb-4" />
             <h3 className="text-lg font-medium mb-2">{t('empty.title')}</h3>

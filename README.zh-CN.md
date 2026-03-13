@@ -146,14 +146,30 @@ pnpm run init
 pnpm dev
 ```
 
+`pnpm run init` 现在执行的是 `uv:ensure`：
+
+- 如果当前平台已有 bundled `uv`，会直接复用。
+- 如果系统 `PATH` 中已有 `uv`（例如通过 Homebrew 或 pipx 安装），会跳过下载。
+- 两者都没有时，才会下载 bundled 二进制。
+
+如果你要打包/发布，请使用 `pnpm run uv:download` 强制下载 bundled 二进制。
+若 GitHub Release 下载受限，可通过以下环境变量改用镜像：
+
+```bash
+UV_DOWNLOAD_BASE_URL=https://<你的镜像>/<version> pnpm run uv:download
+# 可选回退源（逗号分隔）
+UV_DOWNLOAD_BASE_URLS=https://<镜像A>/<version>,https://<镜像B>/<version> pnpm run uv:download
+```
+
 ### 首次启动
 
 首次启动 Monoclaw 时，**设置向导** 将引导你完成以下步骤：
 
 1. **语言与区域** – 配置你的首选语言和地区
-2. **AI 供应商** – 输入所支持供应商的 API 密钥
-3. **技能包** – 选择适用于常见场景的预配置技能
-4. **验证** – 在进入主界面前测试你的配置
+2. **运行时检查** – 验证应用内置的 OpenClaw 与 Gateway 状态
+3. **AI 供应商** – 配置你要使用的模型供应商
+4. **可选渠道连接** – 按需连接消息渠道
+5. **组件启用** – 启用应用内已预置组件（不进行实时拉包）
 
 ### 代理设置
 

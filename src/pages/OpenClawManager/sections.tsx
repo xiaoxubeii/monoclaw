@@ -18,12 +18,11 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
+import { controlPanelClass, controlSurfaceCardClass } from '@/pages/control/styles';
 import type { OpenClawDoctorResult, OpenClawStatusInfo, VoiceCallDefaultMode } from './types';
 
-const runtimeCardClass =
-  'border-border/70 bg-gradient-to-br from-background via-background to-indigo-500/[0.05] shadow-[0_20px_60px_-36px_rgba(99,102,241,0.4)]';
-const runtimePanelClass =
-  'rounded-xl border border-border/60 bg-background/60 backdrop-blur-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]';
+const runtimeCardClass = controlSurfaceCardClass;
+const runtimePanelClass = controlPanelClass;
 
 interface RuntimePathFieldProps {
   label: string;

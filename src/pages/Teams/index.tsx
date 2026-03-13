@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Bot,
@@ -6,20 +6,23 @@ import {
   ChevronLeft,
   ChevronRight,
   Globe,
-  MessageSquareText,
+  Maximize2,
+  Minimize2,
   PackageOpen,
-  Pause,
   Play,
   Plus,
   Puzzle,
   RefreshCw,
   Search,
   Send,
+  Square,
   Sparkles,
   Trash2,
-  Users,
+  User,
   X,
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
@@ -99,6 +102,8 @@ interface TeamRoomFeedItem {
   content: string;
   timestamp: string;
   meta?: string;
+  responseState?: 'running' | 'done';
+  severity?: 'normal' | 'warn' | 'error';
 }
 
 interface TeamArtifactSummary {
@@ -108,6 +113,41 @@ interface TeamArtifactSummary {
   excerpt: string;
   timestamp: string;
   status: TaskStatus;
+}
+
+interface TeamFocusSummary {
+  questionNow: string;
+  questionIntervention: string;
+  questionEta: string;
+  nowHeadline: string;
+  nowDetail: string;
+  nowTone: 'running' | 'warn' | 'success' | 'muted';
+  interventionHeadline: string;
+  interventionDetail: string;
+  interventionTone: 'warn' | 'success';
+  etaHeadline: string;
+  etaDetail: string;
+  etaTone: 'running' | 'warn' | 'success' | 'muted';
+}
+
+function getTaskTimelineMs(task: TeamTask): number {
+  return new Date(task.completedAt || task.startedAt || task.requestedAt).getTime();
+}
+
+function getTaskDurationMs(task: TeamTask): number | null {
+  if (!task.startedAt || !task.completedAt) return null;
+  const started = new Date(task.startedAt).getTime();
+  const completed = new Date(task.completedAt).getTime();
+  if (!Number.isFinite(started) || !Number.isFinite(completed) || completed <= started) return null;
+  return completed - started;
+}
+
+function averageTaskDurationMs(tasks: TeamTask[]): number | null {
+  const durations = tasks
+    .map((task) => getTaskDurationMs(task))
+    .filter((duration): duration is number => typeof duration === 'number');
+  if (durations.length === 0) return null;
+  return durations.reduce((sum, duration) => sum + duration, 0) / durations.length;
 }
 
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
@@ -250,21 +290,108 @@ function toRoomExcerpt(value?: string, maxLength = 220): string {
   return truncate(value.replace(/\s+/g, ' ').trim(), maxLength);
 }
 
+interface TeamRoomCopy {
+  defaultCoordinatorName: string;
+  roomWatcherName: string;
+  introFallback: (teamName: string) => string;
+  introMetaBlueprint: (templateId: string) => string;
+  introMetaCustom: string;
+  userMetaCollaborative: (protocol: string) => string;
+  userMetaSingleRoute: string;
+  handoff: (roleName: string) => string;
+  queued: string;
+  inProgress: string;
+  sharedBack: string;
+  delivered: string;
+  failedDefault: string;
+  needsAttention: string;
+  error: string;
+  headsUp: string;
+  artifactBlockedRun: string;
+  artifactDeliveredOutput: string;
+}
+
+function normalizeRoomLocale(language: string): 'en' | 'zh' | 'ja' {
+  const raw = String(language || '').trim();
+  const normalized = raw.toLowerCase();
+  if (normalized.startsWith('zh')) return 'zh';
+  if (normalized.startsWith('ja')) return 'ja';
+  if (/[\u3040-\u30ff]/.test(raw)) return 'ja';
+  if (/[\u4e00-\u9fff]/.test(raw)) return 'zh';
+  return 'en';
+}
+
+function buildTeamRoomCopy(language: string): TeamRoomCopy {
+  const locale = normalizeRoomLocale(language);
+
+  if (locale === 'zh') {
+    return {
+      defaultCoordinatorName: '团队负责人',
+      roomWatcherName: '房间观察器',
+      introFallback: (teamName) => `${teamName} 已就绪。直接描述目标，团队会自动拆解并协作推进。`,
+      introMetaBlueprint: (templateId) => `蓝图 ${templateId}`,
+      introMetaCustom: '自定义蓝图',
+      userMetaCollaborative: (protocol) => `团队协作 · ${protocol}`,
+      userMetaSingleRoute: '单角色执行',
+      handoff: (roleName) => `已交给 ${roleName} 处理中`,
+      queued: '排队中',
+      inProgress: '进行中',
+      sharedBack: '已同步到房间',
+      delivered: '已交付',
+      failedDefault: '任务在团队完成前失败，请重试或补充约束。',
+      needsAttention: '需要处理',
+      error: '错误',
+      headsUp: '提醒',
+      artifactBlockedRun: '阻塞运行',
+      artifactDeliveredOutput: '已交付结果',
+    };
+  }
+
+  return {
+    defaultCoordinatorName: 'Team Lead',
+    roomWatcherName: 'Room Watcher',
+    introFallback: (teamName) => `${teamName} is ready. Share a goal and this room will break it down across the team.`,
+    introMetaBlueprint: (templateId) => `Blueprint ${templateId}`,
+    introMetaCustom: 'Custom blueprint',
+    userMetaCollaborative: (protocol) => `Collaborative · ${protocol}`,
+    userMetaSingleRoute: 'Single route',
+    handoff: (roleName) => `${roleName} is handling this now`,
+    queued: 'Queued',
+    inProgress: 'In progress',
+    sharedBack: 'Shared back to room',
+    delivered: 'Delivered',
+    failedDefault: 'The task failed before the team could complete it.',
+    needsAttention: 'Needs attention',
+    error: 'Error',
+    headsUp: 'Heads-up',
+    artifactBlockedRun: 'Blocked run',
+    artifactDeliveredOutput: 'Delivered output',
+  };
+}
+
+function isUserVisibleTask(task: TeamTask): boolean {
+  if (!task.collaboration?.enabled) return true;
+  return task.collaboration.isRoot === true;
+}
+
 function buildTeamRoomFeed(
   team: VirtualTeam,
   tasks: TeamTask[],
   logs: TeamAuditLogEntry[],
+  copy: TeamRoomCopy,
 ): TeamRoomFeedItem[] {
   const roleNameById = new Map(team.roles.map((role) => [role.id, role.name]));
-  const coordinatorName = roleNameById.get('manager') || team.roles[0]?.name || 'Team Lead';
+  const coordinatorName = roleNameById.get('manager') || team.roles[0]?.name || copy.defaultCoordinatorName;
   const feed: TeamRoomFeedItem[] = [
     {
       id: `intro-${team.id}`,
       actor: coordinatorName,
       kind: 'lead',
-      content: team.description || `${team.name} is ready. Share a goal and this room will break it down across the team.`,
+      content: team.description || copy.introFallback(team.name),
       timestamp: team.createdAt,
-      meta: team.templateId ? `Blueprint ${team.templateId}` : 'Custom blueprint',
+      meta: team.templateId ? copy.introMetaBlueprint(team.templateId) : copy.introMetaCustom,
+      responseState: 'done',
+      severity: 'normal',
     },
   ];
 
@@ -273,6 +400,7 @@ function buildTeamRoomFeed(
     .slice(-6);
 
   recentTasks.forEach((task) => {
+    const taskCopy = copy;
     const roleName = roleNameById.get(task.assignedRoleId) || task.assignedRoleId;
     feed.push({
       id: `prompt-${task.id}`,
@@ -280,7 +408,9 @@ function buildTeamRoomFeed(
       kind: 'user',
       content: task.input,
       timestamp: task.requestedAt,
-      meta: task.collaboration?.enabled ? `Collaborative via ${task.collaboration.protocol || 'native'}` : 'Single route',
+      meta: task.collaboration?.enabled ? taskCopy.userMetaCollaborative(task.collaboration.protocol || 'native') : taskCopy.userMetaSingleRoute,
+      responseState: 'done',
+      severity: 'normal',
     });
 
     if (task.status === 'queued' || task.status === 'running') {
@@ -288,9 +418,11 @@ function buildTeamRoomFeed(
         id: `handoff-${task.id}`,
         actor: coordinatorName,
         kind: 'lead',
-        content: `${roleName} is handling this now.`,
+        content: taskCopy.handoff(roleName),
         timestamp: task.startedAt || task.requestedAt,
-        meta: task.status === 'queued' ? 'Queued' : 'In progress',
+        meta: task.status === 'queued' ? taskCopy.queued : taskCopy.inProgress,
+        responseState: 'running',
+        severity: 'normal',
       });
     }
 
@@ -301,7 +433,9 @@ function buildTeamRoomFeed(
         kind: 'role',
         content: task.result,
         timestamp: task.completedAt || task.startedAt || task.requestedAt,
-        meta: task.collaboration?.enabled ? 'Shared back to room' : 'Delivered',
+        meta: task.collaboration?.enabled ? taskCopy.sharedBack : taskCopy.delivered,
+        responseState: 'done',
+        severity: 'normal',
       });
     }
 
@@ -310,9 +444,11 @@ function buildTeamRoomFeed(
         id: `failed-${task.id}`,
         actor: roleName,
         kind: 'alert',
-        content: task.error || 'The task failed before the team could complete it.',
+        content: task.error || taskCopy.failedDefault,
         timestamp: task.completedAt || task.startedAt || task.requestedAt,
-        meta: 'Needs attention',
+        meta: taskCopy.needsAttention,
+        responseState: 'done',
+        severity: 'error',
       });
     }
   });
@@ -324,18 +460,20 @@ function buildTeamRoomFeed(
     .forEach((entry) => {
       feed.push({
         id: `log-${entry.id}`,
-        actor: entry.source === 'task' ? coordinatorName : 'Room Watcher',
+        actor: entry.source === 'task' ? coordinatorName : copy.roomWatcherName,
         kind: 'alert',
         content: entry.message,
         timestamp: entry.timestamp,
-        meta: entry.level === 'error' ? 'Error' : 'Heads-up',
+        meta: entry.level === 'error' ? copy.error : copy.headsUp,
+        responseState: 'done',
+        severity: entry.level === 'error' ? 'error' : 'warn',
       });
     });
 
   return feed.sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime());
 }
 
-function buildArtifactSummaries(team: VirtualTeam, tasks: TeamTask[]): TeamArtifactSummary[] {
+function buildArtifactSummaries(team: VirtualTeam, tasks: TeamTask[], copy: TeamRoomCopy): TeamArtifactSummary[] {
   const roleNameById = new Map(team.roles.map((role) => [role.id, role.name]));
 
   return [...tasks]
@@ -349,7 +487,7 @@ function buildArtifactSummaries(team: VirtualTeam, tasks: TeamTask[]): TeamArtif
     .map((task) => ({
       id: task.id,
       roleName: roleNameById.get(task.assignedRoleId) || task.assignedRoleId,
-      title: task.status === 'failed' ? 'Blocked run' : 'Delivered output',
+      title: task.status === 'failed' ? copy.artifactBlockedRun : copy.artifactDeliveredOutput,
       excerpt: toRoomExcerpt(task.result || task.error, 120),
       timestamp: task.completedAt || task.startedAt || task.requestedAt,
       status: task.status,
@@ -416,6 +554,7 @@ export function Teams() {
   const [taskProtocolOverrideEnabled, setTaskProtocolOverrideEnabled] = useState(false);
   const [taskCollaborationProtocol, setTaskCollaborationProtocol] = useState<CollaborationProtocol>('native');
   const [roomSidebarView, setRoomSidebarView] = useState<TeamRoomSidebarView>('participants');
+  const [roomFullscreen, setRoomFullscreen] = useState(false);
   const [feishuChannelConnected, setFeishuChannelConnected] = useState(false);
   const [pendingAction, setPendingAction] = useState<'none' | 'start' | 'hibernate' | 'dispatch' | 'saveTeam'>('none');
   const [teamToDissolve, setTeamToDissolve] = useState<VirtualTeam | null>(null);
@@ -440,6 +579,16 @@ export function Teams() {
     }
   }, [routeTeamId, teams, isInitialized, loading, navigate]);
 
+  useEffect(() => {
+    setRoomFullscreen(false);
+  }, [routeTeamId]);
+
+  useEffect(() => {
+    if (detailTab !== 'workbench') {
+      setRoomFullscreen(false);
+    }
+  }, [detailTab]);
+
   const selectedTeam = useMemo(() => {
     if (!routeTeamId) return null;
     return teams.find((team) => team.id === routeTeamId) ?? null;
@@ -458,8 +607,14 @@ export function Teams() {
   );
 
   const runtime = selectedTeam ? runtimes[selectedTeam.id] : undefined;
-  const tasks = selectedTeam ? (tasksByTeam[selectedTeam.id] ?? []) : [];
-  const logs = selectedTeam ? (logsByTeam[selectedTeam.id] ?? []) : [];
+  const tasks = useMemo(
+    () => (selectedTeam ? (tasksByTeam[selectedTeam.id] ?? []) : []),
+    [selectedTeam, tasksByTeam],
+  );
+  const logs = useMemo(
+    () => (selectedTeam ? (logsByTeam[selectedTeam.id] ?? []) : []),
+    [selectedTeam, logsByTeam],
+  );
 
   useEffect(() => {
     if (!templates.length) {
@@ -595,7 +750,7 @@ export function Teams() {
     setSearchParams(nextSearch, { replace: true });
   }, [routeTeamId, searchParams, setSearchParams]);
 
-  const searchRemoteTemplates = async (rawQuery?: string) => {
+  const searchRemoteTemplates = useCallback(async (rawQuery?: string) => {
     setMarketSearching(true);
     setMarketError(null);
     try {
@@ -618,13 +773,13 @@ export function Teams() {
     } finally {
       setMarketSearching(false);
     }
-  };
+  }, [marketQuery, t]);
 
   useEffect(() => {
     if (listTab !== 'market') return;
     if (marketSearching || marketResults.length > 0 || marketError) return;
     void searchRemoteTemplates('team template');
-  }, [listTab, marketSearching, marketResults.length, marketError]);
+  }, [listTab, marketSearching, marketResults.length, marketError, searchRemoteTemplates]);
 
   const onCreateFromTemplate = async (templateId?: string) => {
     const resolvedTemplateId = templateId || selectedTemplateId;
@@ -872,25 +1027,251 @@ export function Teams() {
   const teamCount = teams.length;
   const runningTeamCount = teams.filter((team) => team.status === 'running').length;
   const queuedTaskCount = Object.values(runtimes).reduce((sum, snapshot) => sum + snapshot.queuedTasks, 0);
-  const completedTaskCount = tasks.filter((task) => task.status === 'completed').length;
-  const failedTaskCount = tasks.filter((task) => task.status === 'failed').length;
-  const latestLogs = logs.slice().reverse();
-  const activeTaskCount = tasks.filter((task) => task.status === 'running' || task.status === 'queued').length;
+  const roomCopy = useMemo(() => buildTeamRoomCopy(i18n.language), [i18n.language]);
+  const visibleTasks = useMemo(() => tasks.filter(isUserVisibleTask), [tasks]);
+  const visibleTasksByNewest = [...visibleTasks]
+    .sort((left, right) => getTaskTimelineMs(right) - getTaskTimelineMs(left));
+  const latestVisibleTask = visibleTasksByNewest[0];
+  const activeVisibleTasks = visibleTasksByNewest.filter((task) => task.status === 'running' || task.status === 'queued');
+  const completedTaskCount = visibleTasks.filter((task) => task.status === 'completed').length;
+  const failedTaskCount = visibleTasks.filter((task) => task.status === 'failed').length;
+  const latestLogs = useMemo(() => logs.slice().reverse(), [logs]);
+  const activeTaskCount = activeVisibleTasks.length;
+  const latestIssueLog = latestLogs.find((entry) => entry.level !== 'info');
   const attentionCount = failedTaskCount + latestLogs.filter((entry) => entry.level !== 'info').length;
   const teamBindings = Array.from(new Set(
     (selectedTeam?.roles ?? [])
       .map((role) => (role.agent?.provider || 'openclaw').trim())
       .filter(Boolean)
   ));
-  const roomFeed = selectedTeam ? buildTeamRoomFeed(selectedTeam, tasks, logs) : [];
-  const artifactSummaries = selectedTeam ? buildArtifactSummaries(selectedTeam, tasks) : [];
-  const spotlightTasks = [...tasks]
-    .sort((left, right) => {
-      const rightTime = new Date(right.completedAt || right.startedAt || right.requestedAt).getTime();
-      const leftTime = new Date(left.completedAt || left.startedAt || left.requestedAt).getTime();
-      return rightTime - leftTime;
-    })
-    .slice(0, 4);
+  const roleNameById = useMemo(
+    () => new Map((selectedTeam?.roles ?? []).map((role) => [role.id, role.name])),
+    [selectedTeam?.roles],
+  );
+  const activeCollaborativeRootTask = activeVisibleTasks.find(
+    (task) => task.collaboration?.enabled && task.collaboration.isRoot,
+  );
+  const activeCollaborativeChildren = activeCollaborativeRootTask
+    ? tasks.filter((task) => task.collaboration?.parentTaskId === activeCollaborativeRootTask.id)
+    : [];
+  const completedStepCount = activeCollaborativeChildren.filter((task) => task.status === 'completed').length;
+  const currentStepTask = activeCollaborativeChildren.find((task) => task.status === 'running')
+    || activeCollaborativeChildren.find((task) => task.status === 'queued');
+  const totalSteps = activeCollaborativeRootTask?.collaboration?.totalSteps
+    || activeCollaborativeChildren.reduce((max, task) => Math.max(max, task.collaboration?.step || 0), 0);
+  const currentStep = currentStepTask?.collaboration?.step
+    || (totalSteps > 0 ? Math.min(totalSteps, completedStepCount + 1) : undefined);
+  const completedStepDurationMs = averageTaskDurationMs(
+    activeCollaborativeChildren.filter((task) => task.status === 'completed'),
+  );
+  const remainingSteps = Math.max(0, totalSteps - completedStepCount);
+  const collaborativeEtaMinutes = completedStepDurationMs && remainingSteps > 0
+    ? Math.max(1, Math.round((completedStepDurationMs * remainingSteps) / 60000))
+    : null;
+  const recentRootDurationMs = averageTaskDurationMs(
+    visibleTasks.filter((task) => task.status === 'completed' || task.status === 'failed'),
+  );
+  const activeRootEtaMinutes = recentRootDurationMs && activeTaskCount > 0
+    ? Math.max(1, Math.round((recentRootDurationMs * activeTaskCount) / 60000))
+    : null;
+
+  const teamFocusSummary: TeamFocusSummary = useMemo(() => {
+    const locale = normalizeRoomLocale(i18n.language);
+    const isZh = locale === 'zh';
+    const copy = isZh
+      ? {
+        questionNow: '现在在做什么',
+        questionIntervention: '需不需要我介入',
+        questionEta: '预计多久有结果',
+        nowPaused: '团队未运行',
+        nowPausedDetail: '先启动团队，任务才会继续处理。',
+        nowRunningCollaborative: '多角色协作处理中',
+        nowRunningSingle: '任务处理中',
+        nowQueued: '任务排队中',
+        nowBlocked: '最近任务卡住',
+        nowCompleted: '最近任务已完成',
+        nowIdle: '等待新任务',
+        interventionNeeded: '需要你介入',
+        interventionNotNeeded: '暂不需要',
+        interventionPausedDetail: '请先启动团队，再继续提交 mission。',
+        interventionFailedDetail: '最近任务失败，建议补充约束后重试。',
+        interventionRunningDetail: '团队正在自动推进流程，可以先等待结果。',
+        interventionIdleDetail: '当前无阻塞，随时可以发新任务。',
+        etaPausedHeadline: '启动后开始计算',
+        etaProgress: (done: number, total: number) => `阶段进度 ${done}/${total}`,
+        etaStepOnly: (step?: number) => step ? `当前推进到第 ${step} 步，完成后会自动进入下一步。` : '正在推进协作步骤。',
+        etaStepWithMinutes: (step: number | undefined, minutes: number) =>
+          step ? `当前第 ${step} 步，预计约 ${minutes} 分钟。` : `预计约 ${minutes} 分钟。`,
+        etaActiveUnknown: '处理中',
+        etaActiveUnknownDetail: '正在处理你的任务，结果通常会很快返回。',
+        etaActiveWithMinutes: (minutes: number) => `预计约 ${minutes} 分钟`,
+        etaCompletedHeadline: '已交付',
+        etaCompletedDetail: (time: string) => `最近一次交付时间：${time}`,
+        etaRetryHeadline: '待重试',
+        etaRetryDetail: '补充条件后可以立即重跑。',
+        etaIdleHeadline: '暂无进行中任务',
+        etaIdleDetail: '提交 mission 后会显示实时进度。',
+      }
+      : {
+        questionNow: 'What is happening now',
+        questionIntervention: 'Do I need to step in',
+        questionEta: 'When can I expect results',
+        nowPaused: 'Team is not running',
+        nowPausedDetail: 'Start the team before tasks can continue.',
+        nowRunningCollaborative: 'Collaborative flow is running',
+        nowRunningSingle: 'Task is being processed',
+        nowQueued: 'Task is queued',
+        nowBlocked: 'Recent task is blocked',
+        nowCompleted: 'Recent task completed',
+        nowIdle: 'Waiting for a new task',
+        interventionNeeded: 'Action required',
+        interventionNotNeeded: 'No action needed',
+        interventionPausedDetail: 'Start the team to continue dispatching missions.',
+        interventionFailedDetail: 'A recent task failed. Add constraints and retry.',
+        interventionRunningDetail: 'The team is progressing automatically. You can wait for results.',
+        interventionIdleDetail: 'No blocker detected. You can send a new mission anytime.',
+        etaPausedHeadline: 'Starts after team is running',
+        etaProgress: (done: number, total: number) => `Progress ${done}/${total}`,
+        etaStepOnly: (step?: number) => step ? `Currently on step ${step}, then it will hand off automatically.` : 'Collaborative steps are in progress.',
+        etaStepWithMinutes: (step: number | undefined, minutes: number) =>
+          step ? `Step ${step} in progress, about ${minutes} min left.` : `About ${minutes} min left.`,
+        etaActiveUnknown: 'In progress',
+        etaActiveUnknownDetail: 'The team is working on your request.',
+        etaActiveWithMinutes: (minutes: number) => `About ${minutes} min`,
+        etaCompletedHeadline: 'Delivered',
+        etaCompletedDetail: (time: string) => `Latest delivery: ${time}`,
+        etaRetryHeadline: 'Retry needed',
+        etaRetryDetail: 'Adjust constraints and rerun.',
+        etaIdleHeadline: 'No active run',
+        etaIdleDetail: 'Progress will appear after you dispatch a mission.',
+      };
+
+    let nowHeadline: string;
+    let nowDetail: string;
+    let nowTone: TeamFocusSummary['nowTone'];
+
+    if (selectedTeam?.status !== 'running') {
+      nowHeadline = copy.nowPaused;
+      nowDetail = copy.nowPausedDetail;
+      nowTone = 'warn';
+    } else if (activeCollaborativeRootTask) {
+      const coordinator = roleNameById.get(activeCollaborativeRootTask.assignedRoleId) || activeCollaborativeRootTask.assignedRoleId;
+      const progressText = totalSteps > 0
+        ? ` (${completedStepCount}/${totalSteps})`
+        : '';
+      nowHeadline = copy.nowRunningCollaborative;
+      nowDetail = `${coordinator}${progressText}`;
+      nowTone = 'running';
+    } else if (activeVisibleTasks.length > 0) {
+      const activeTask = activeVisibleTasks[0];
+      const roleName = roleNameById.get(activeTask.assignedRoleId) || activeTask.assignedRoleId;
+      nowHeadline = activeTask.status === 'queued' ? copy.nowQueued : copy.nowRunningSingle;
+      nowDetail = roleName;
+      nowTone = 'running';
+    } else if (latestVisibleTask?.status === 'failed') {
+      nowHeadline = copy.nowBlocked;
+      nowDetail = toRoomExcerpt(latestVisibleTask.error, 100) || copy.interventionFailedDetail;
+      nowTone = 'warn';
+    } else if (latestVisibleTask?.status === 'completed') {
+      nowHeadline = copy.nowCompleted;
+      nowDetail = toRoomExcerpt(latestVisibleTask.result, 100) || copy.interventionIdleDetail;
+      nowTone = 'success';
+    } else {
+      nowHeadline = copy.nowIdle;
+      nowDetail = copy.interventionIdleDetail;
+      nowTone = 'muted';
+    }
+
+    const hasErrorSignal = Boolean(latestIssueLog && latestIssueLog.level === 'error');
+    const needsIntervention = (selectedTeam?.status !== 'running') || failedTaskCount > 0 || hasErrorSignal;
+
+    let interventionHeadline = needsIntervention ? copy.interventionNeeded : copy.interventionNotNeeded;
+    let interventionDetail = copy.interventionIdleDetail;
+    if (selectedTeam?.status !== 'running') {
+      interventionDetail = copy.interventionPausedDetail;
+    } else if (failedTaskCount > 0) {
+      interventionDetail = copy.interventionFailedDetail;
+    } else if (hasErrorSignal) {
+      interventionDetail = `${copy.interventionNeeded}: ${toRoomExcerpt(latestIssueLog?.message, 100)}`;
+    } else if (activeTaskCount > 0) {
+      interventionDetail = copy.interventionRunningDetail;
+    }
+
+    let etaHeadline = copy.etaIdleHeadline;
+    let etaDetail = copy.etaIdleDetail;
+    let etaTone: TeamFocusSummary['etaTone'] = 'muted';
+
+    if (selectedTeam?.status !== 'running') {
+      etaHeadline = copy.etaPausedHeadline;
+      etaDetail = copy.nowPausedDetail;
+      etaTone = 'warn';
+    } else if (activeCollaborativeRootTask && totalSteps > 0) {
+      etaHeadline = copy.etaProgress(completedStepCount, totalSteps);
+      etaDetail = collaborativeEtaMinutes
+        ? copy.etaStepWithMinutes(currentStep, collaborativeEtaMinutes)
+        : copy.etaStepOnly(currentStep);
+      etaTone = 'running';
+    } else if (activeTaskCount > 0) {
+      if (activeRootEtaMinutes) {
+        etaHeadline = copy.etaActiveWithMinutes(activeRootEtaMinutes);
+      } else {
+        etaHeadline = copy.etaActiveUnknown;
+      }
+      etaDetail = copy.etaActiveUnknownDetail;
+      etaTone = 'running';
+    } else if (latestVisibleTask?.status === 'completed') {
+      etaHeadline = copy.etaCompletedHeadline;
+      etaDetail = copy.etaCompletedDetail(formatRelativeTime(latestVisibleTask.completedAt || latestVisibleTask.requestedAt));
+      etaTone = 'success';
+    } else if (latestVisibleTask?.status === 'failed') {
+      etaHeadline = copy.etaRetryHeadline;
+      etaDetail = copy.etaRetryDetail;
+      etaTone = 'warn';
+    }
+
+    return {
+      questionNow: copy.questionNow,
+      questionIntervention: copy.questionIntervention,
+      questionEta: copy.questionEta,
+      nowHeadline,
+      nowDetail,
+      nowTone,
+      interventionHeadline,
+      interventionDetail,
+      interventionTone: needsIntervention ? 'warn' : 'success',
+      etaHeadline,
+      etaDetail,
+      etaTone,
+    };
+  }, [
+    i18n.language,
+    selectedTeam,
+    activeCollaborativeRootTask,
+    roleNameById,
+    totalSteps,
+    completedStepCount,
+    currentStep,
+    activeVisibleTasks,
+    latestVisibleTask,
+    latestIssueLog,
+    failedTaskCount,
+    activeTaskCount,
+    collaborativeEtaMinutes,
+    activeRootEtaMinutes,
+  ]);
+
+  const roomFeed = useMemo(
+    () => (selectedTeam ? buildTeamRoomFeed(selectedTeam, visibleTasks, logs, roomCopy) : []),
+    [selectedTeam, visibleTasks, logs, roomCopy],
+  );
+  const artifactSummaries = useMemo(
+    () => (selectedTeam ? buildArtifactSummaries(selectedTeam, visibleTasks, roomCopy) : []),
+    [selectedTeam, visibleTasks, roomCopy],
+  );
+  const spotlightTasks = useMemo(
+    () => [...visibleTasksByNewest].slice(0, 4),
+    [visibleTasksByNewest],
+  );
 
   const formatBindingLabel = (binding: string) => {
     const normalized = binding.toLowerCase();
@@ -917,6 +1298,129 @@ export function Teams() {
     setDetailTab('runs');
     setRunsTab(nextTab);
   };
+
+  const roomLayoutClass = roomFullscreen ? 'grid-cols-1' : 'xl:grid-cols-[minmax(0,1fr)_340px]';
+  const roomCardHeightClass = roomFullscreen
+    ? 'h-[calc(100vh-5.5rem)] min-h-[38rem]'
+    : 'h-[calc(100vh-19rem)] min-h-[34rem]';
+  const roomFullscreenLabel = roomFullscreen
+    ? t('detail.roomExitFullscreen', { defaultValue: 'Exit full screen' })
+    : t('detail.roomEnterFullscreen', { defaultValue: 'Full screen' });
+
+  const roomFeedNodes = useMemo(() => roomFeed.map((item) => {
+    const isUserMessage = item.kind === 'user';
+    const isAlert = item.kind === 'alert';
+    const isSystemMessage = !isUserMessage && !isAlert;
+    const isResponding = item.responseState === 'running';
+    const showTypingBubble = isResponding && !isUserMessage;
+    const displayMessage = item.content || '';
+
+    return (
+      <div
+        key={item.id}
+        className={cn('flex gap-3', isUserMessage ? 'flex-row-reverse' : 'flex-row')}
+      >
+        <div
+          className={cn(
+            'mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white',
+            isUserMessage && 'bg-primary text-primary-foreground',
+            item.kind === 'lead' && 'bg-gradient-to-br from-cyan-500 to-sky-600',
+            item.kind === 'role' && 'bg-gradient-to-br from-indigo-500 to-violet-600',
+            isAlert && 'bg-gradient-to-br from-amber-500 to-orange-600'
+          )}
+        >
+          {isUserMessage ? (
+            <User className="h-4 w-4" />
+          ) : isAlert ? (
+            <AlertTriangle className="h-4 w-4" />
+          ) : item.kind === 'lead' ? (
+            <Sparkles className="h-4 w-4" />
+          ) : (
+            <Bot className="h-4 w-4" />
+          )}
+        </div>
+        <div className={cn('flex min-w-0 max-w-[80%] flex-col space-y-1.5', isUserMessage ? 'items-end' : 'items-start')}>
+          <div className={cn('flex items-center gap-2', isUserMessage && 'justify-end')}>
+            <span className="text-sm font-medium">{item.actor}</span>
+            <span className="text-xs text-muted-foreground">{formatRelativeTime(item.timestamp)}</span>
+          </div>
+          <div
+            className={cn(
+              'relative rounded-2xl px-4 py-3',
+              !isUserMessage && 'w-full',
+              isUserMessage && 'bg-primary text-primary-foreground',
+              isSystemMessage && 'bg-muted text-foreground',
+              isAlert && 'border border-amber-500/25 bg-amber-500/8'
+            )}
+          >
+            {showTypingBubble ? (
+              <div className="flex gap-1">
+                <span className="h-2 w-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="h-2 w-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="h-2 w-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: '300ms' }} />
+              </div>
+            ) : (
+              <>
+                {isUserMessage ? (
+                  <p className="whitespace-pre-wrap break-words break-all text-sm">
+                    {displayMessage}
+                  </p>
+                ) : (
+                  <div className="prose prose-sm dark:prose-invert max-w-none break-words break-all">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        code({ className, children, ...props }) {
+                          const match = /language-(\w+)/.exec(className || '');
+                          const isInline = !match && !className;
+                          if (isInline) {
+                            return (
+                              <code
+                                className="bg-background/50 px-1.5 py-0.5 rounded text-sm font-mono break-words break-all"
+                                {...props}
+                              >
+                                {children}
+                              </code>
+                            );
+                          }
+                          return (
+                            <pre className="bg-background/50 rounded-lg p-4 overflow-x-auto">
+                              <code className={cn('text-sm font-mono', className)} {...props}>
+                                {children}
+                              </code>
+                            </pre>
+                          );
+                        },
+                        a({ href, children }) {
+                          return (
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary hover:underline break-words break-all"
+                            >
+                              {children}
+                            </a>
+                          );
+                        },
+                      }}
+                    >
+                      {displayMessage}
+                    </ReactMarkdown>
+                  </div>
+                )}
+              </>
+            )}
+            {item.meta && !showTypingBubble && (
+              <p className={cn('mt-2 text-xs', isUserMessage ? 'text-primary-foreground/80' : 'text-muted-foreground')}>
+                {item.meta}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }), [roomFeed]);
 
   return (
     <div className="space-y-6">
@@ -949,7 +1453,7 @@ export function Teams() {
             </div>
           </CardContent>
         </Card>
-      ) : (
+      ) : !roomFullscreen ? (
         <Card className={teamsHeroCardClass}>
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(129,140,248,0.18),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(59,130,246,0.12),transparent_30%)]" />
           <CardContent className="relative flex flex-col gap-5 p-6 xl:flex-row xl:items-end xl:justify-between">
@@ -997,21 +1501,20 @@ export function Teams() {
                 </Button>
                 <Button
                   size="sm"
-                  variant="outline"
-                  className="border-border/70 bg-background/60"
+                  variant="destructive"
                   onClick={() => void onHibernateTeam()}
                   disabled={pendingAction !== 'none' || selectedTeam.status === 'stopped' || selectedTeam.status === 'hibernating'}
                 >
-                  <Pause className="mr-1 h-4 w-4" />
+                  <Square className="mr-1 h-4 w-4" />
                   {t('detail.hibernate')}
                 </Button>
               </div>
             )}
           </CardContent>
         </Card>
-      )}
+      ) : null}
 
-      {error && (
+      {error && !roomFullscreen && (
         <Card className="border-destructive">
           <CardContent className="flex items-center justify-between gap-4 pt-4">
             <p className="text-sm text-destructive">{error}</p>
@@ -1370,30 +1873,86 @@ export function Teams() {
       )}
 
       {routeTeamId && selectedTeam && (
-        <div className="space-y-4">
+        <div className={cn(roomFullscreen ? 'space-y-0' : 'space-y-4')}>
           <Tabs value={detailTab} onValueChange={(value) => setDetailTab(value as TeamDetailTab)}>
-            <TabsList className={cn(teamsTabsListClass, 'w-full max-w-2xl grid-cols-3')}>
-              <TabsTrigger value="workbench">
-                {t('detail.tabs.workbench', { defaultValue: 'Workbench' })}
-              </TabsTrigger>
-              <TabsTrigger value="studio">
-                {t('detail.tabs.studio', { defaultValue: 'Studio' })}
-              </TabsTrigger>
-              <TabsTrigger value="runs">
-                {t('detail.tabs.runs', { defaultValue: 'Runs' })}
-              </TabsTrigger>
-            </TabsList>
+            {!roomFullscreen && (
+              <TabsList className={cn(teamsTabsListClass, 'w-full max-w-2xl grid-cols-3')}>
+                <TabsTrigger value="workbench">
+                  {t('detail.tabs.workbench', { defaultValue: 'Workbench' })}
+                </TabsTrigger>
+                <TabsTrigger value="studio">
+                  {t('detail.tabs.studio', { defaultValue: 'Studio' })}
+                </TabsTrigger>
+                <TabsTrigger value="runs">
+                  {t('detail.tabs.runs', { defaultValue: 'Runs' })}
+                </TabsTrigger>
+              </TabsList>
+            )}
 
-            <TabsContent value="workbench" className="mt-6 space-y-4">
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-                <Card className={cn(teamsSurfaceCardClass, 'overflow-hidden')}>
+            <TabsContent value="workbench" className={cn(roomFullscreen ? 'mt-0 space-y-0' : 'mt-6 space-y-4')}>
+              {!roomFullscreen && (
+                <div className="grid gap-3 lg:grid-cols-3">
+                <Card className={teamsSurfaceCardClass}>
+                  <CardContent className="space-y-2 p-4">
+                    <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">{teamFocusSummary.questionNow}</p>
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      {teamFocusSummary.nowTone === 'running' ? (
+                        <RefreshCw className="h-4 w-4 animate-spin text-blue-500" />
+                      ) : teamFocusSummary.nowTone === 'warn' ? (
+                        <AlertTriangle className="h-4 w-4 text-amber-500" />
+                      ) : teamFocusSummary.nowTone === 'success' ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                      ) : (
+                        <Sparkles className="h-4 w-4 text-muted-foreground" />
+                      )}
+                      <span>{teamFocusSummary.nowHeadline}</span>
+                    </div>
+                    <p className="text-sm text-muted-foreground">{teamFocusSummary.nowDetail}</p>
+                  </CardContent>
+                </Card>
+
+                <Card className={teamsSurfaceCardClass}>
+                  <CardContent className="space-y-2 p-4">
+                    <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">{teamFocusSummary.questionIntervention}</p>
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      {teamFocusSummary.interventionTone === 'warn' ? (
+                        <AlertTriangle className="h-4 w-4 text-amber-500" />
+                      ) : (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                      )}
+                      <span>{teamFocusSummary.interventionHeadline}</span>
+                    </div>
+                    <p className="text-sm text-muted-foreground">{teamFocusSummary.interventionDetail}</p>
+                  </CardContent>
+                </Card>
+
+                <Card className={teamsSurfaceCardClass}>
+                  <CardContent className="space-y-2 p-4">
+                    <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">{teamFocusSummary.questionEta}</p>
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      {teamFocusSummary.etaTone === 'running' ? (
+                        <RefreshCw className="h-4 w-4 animate-spin text-blue-500" />
+                      ) : teamFocusSummary.etaTone === 'warn' ? (
+                        <AlertTriangle className="h-4 w-4 text-amber-500" />
+                      ) : teamFocusSummary.etaTone === 'success' ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                      ) : (
+                        <Sparkles className="h-4 w-4 text-muted-foreground" />
+                      )}
+                      <span>{teamFocusSummary.etaHeadline}</span>
+                    </div>
+                    <p className="text-sm text-muted-foreground">{teamFocusSummary.etaDetail}</p>
+                  </CardContent>
+                </Card>
+                </div>
+              )}
+
+              <div className={cn('grid gap-4', roomLayoutClass)}>
+                <Card className={cn(teamsSurfaceCardClass, 'min-h-0 overflow-hidden', roomCardHeightClass, 'flex flex-col')}>
                   <CardHeader className="border-b border-border/70 bg-background/40">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                       <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <MessageSquareText className="h-4 w-4 text-primary" />
-                          <CardTitle>{t('detail.roomTitle', { defaultValue: 'Team Room' })}</CardTitle>
-                        </div>
+                        <CardTitle>{t('detail.roomTitle', { defaultValue: 'Team Room' })}</CardTitle>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="secondary">
@@ -1405,20 +1964,30 @@ export function Teams() {
                         <Badge variant={attentionCount > 0 ? 'destructive' : 'outline'}>
                           {t('detail.roomAttention', { defaultValue: '{{count}} need attention', count: attentionCount })}
                         </Badge>
+                        <Button
+                          size="icon"
+                          variant="outline"
+                          className="h-8 w-8 border-border/70 bg-background/70"
+                          onClick={() => setRoomFullscreen((previous) => !previous)}
+                          title={roomFullscreenLabel}
+                          aria-label={roomFullscreenLabel}
+                        >
+                          {roomFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                        </Button>
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent className="p-0">
+                  <CardContent className="flex min-h-0 flex-1 flex-col p-0">
                     {selectedTeam.status !== 'running' && (
-                      <div className="flex items-center justify-between gap-3 border-b border-amber-500/20 bg-amber-500/10 px-5 py-3 text-sm">
-                        <div className="flex items-center gap-2 text-amber-200">
+                      <div className="flex items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-500/[0.12] px-5 py-3 text-sm">
+                        <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200">
                           <AlertTriangle className="h-4 w-4" />
                           <span>{statusLabel(selectedTeam.status)}</span>
                         </div>
                         <Button
                           size="sm"
                           variant="outline"
-                          className="border-amber-400/40 bg-background/40"
+                          className="border-amber-500/55 bg-background/70 text-amber-900 hover:bg-amber-500/15 hover:text-amber-950 dark:border-amber-300/50 dark:bg-background/50 dark:text-amber-100 dark:hover:bg-amber-500/15"
                           onClick={() => void onStartTeam()}
                           disabled={pendingAction !== 'none' || selectedTeam.status === 'starting'}
                         >
@@ -1427,65 +1996,12 @@ export function Teams() {
                       </div>
                     )}
 
-                    <div className="max-h-[34rem] space-y-5 overflow-auto px-5 py-5">
-                      {roomFeed.map((item) => {
-                        const isUserMessage = item.kind === 'user';
-                        const isAlert = item.kind === 'alert';
-                        return (
-                          <div
-                            key={item.id}
-                            className={cn('flex gap-3', isUserMessage ? 'flex-row-reverse' : 'flex-row')}
-                          >
-                            <div
-                              className={cn(
-                                'mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl text-white',
-                                isUserMessage && 'bg-primary text-primary-foreground',
-                                item.kind === 'lead' && 'bg-gradient-to-br from-cyan-500 to-sky-600',
-                                item.kind === 'role' && 'bg-gradient-to-br from-indigo-500 to-violet-600',
-                                isAlert && 'bg-gradient-to-br from-amber-500 to-orange-600'
-                              )}
-                            >
-                              {isUserMessage ? (
-                                <Users className="h-4 w-4" />
-                              ) : isAlert ? (
-                                <AlertTriangle className="h-4 w-4" />
-                              ) : item.kind === 'lead' ? (
-                                <Sparkles className="h-4 w-4" />
-                              ) : (
-                                <Bot className="h-4 w-4" />
-                              )}
-                            </div>
-                            <div className={cn('max-w-[85%] space-y-1', isUserMessage && 'items-end')}>
-                              <div className={cn('flex items-center gap-2', isUserMessage && 'justify-end')}>
-                                <span className="text-sm font-medium">{item.actor}</span>
-                                <span className="text-xs text-muted-foreground">{formatRelativeTime(item.timestamp)}</span>
-                              </div>
-                              <div
-                                className={cn(
-                                  'rounded-2xl border px-4 py-3 text-sm leading-6 shadow-sm',
-                                  isUserMessage && 'border-primary/20 bg-primary text-primary-foreground',
-                                  item.kind === 'lead' && 'border-cyan-500/20 bg-cyan-500/8',
-                                  item.kind === 'role' && 'border-border/70 bg-background/70',
-                                  isAlert && 'border-amber-500/25 bg-amber-500/8'
-                                )}
-                              >
-                                <p className="whitespace-pre-wrap">
-                                  {toRoomExcerpt(item.content, item.kind === 'user' ? 240 : 360)}
-                                </p>
-                                {item.meta && (
-                                  <p className={cn('mt-2 text-xs', isUserMessage ? 'text-primary-foreground/80' : 'text-muted-foreground')}>
-                                    {item.meta}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
+                    <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
+                      {roomFeedNodes}
                     </div>
 
-                    <div className="border-t border-border/70 bg-background/35 px-5 py-4">
-                      <div className="rounded-3xl border border-border/70 bg-background/70 p-4 shadow-[0_24px_70px_-40px_rgba(56,189,248,0.35)]">
+                    <div className="sticky bottom-0 shrink-0 border-t border-border/70 bg-background/35 px-5 py-4">
+                      <div className="rounded-3xl bg-background/70 p-4 shadow-[0_24px_70px_-40px_rgba(56,189,248,0.35)]">
                         <div className="space-y-3">
                           <div className="space-y-2">
                             <Label>{t('dispatch.taskInput')}</Label>
@@ -1494,7 +2010,7 @@ export function Teams() {
                               value={taskInput}
                               onChange={(event) => setTaskInput(event.target.value)}
                               placeholder={t('dispatch.taskPlaceholder')}
-                              className="border-none bg-transparent px-0 shadow-none focus-visible:ring-0"
+                              className="min-h-[44px] max-h-[200px] resize-none pr-4"
                             />
                           </div>
 
@@ -1547,7 +2063,8 @@ export function Teams() {
                   </CardContent>
                 </Card>
 
-                <div className="space-y-4">
+                {!roomFullscreen && (
+                  <div className="space-y-4">
                   <Card className={teamsSurfaceCardClass}>
                     <CardHeader>
                       <div className="flex justify-start">
@@ -1611,11 +2128,11 @@ export function Teams() {
                           <div className="grid grid-cols-3 gap-2">
                             <div className={cn(teamsPanelClass, 'p-3')}>
                               <p className="text-xs text-muted-foreground">{t('status.queued')}</p>
-                              <p className="mt-1 text-lg font-semibold">{tasks.filter((task) => task.status === 'queued').length}</p>
+                              <p className="mt-1 text-lg font-semibold">{visibleTasks.filter((task) => task.status === 'queued').length}</p>
                             </div>
                             <div className={cn(teamsPanelClass, 'p-3')}>
                               <p className="text-xs text-muted-foreground">{t('status.running')}</p>
-                              <p className="mt-1 text-lg font-semibold">{tasks.filter((task) => task.status === 'running').length}</p>
+                              <p className="mt-1 text-lg font-semibold">{visibleTasks.filter((task) => task.status === 'running').length}</p>
                             </div>
                             <div className={cn(teamsPanelClass, 'p-3')}>
                               <p className="text-xs text-muted-foreground">{t('status.completed')}</p>
@@ -1685,7 +2202,8 @@ export function Teams() {
                       </Button>
                     </CardContent>
                   </Card>
-                </div>
+                  </div>
+                )}
               </div>
             </TabsContent>
 
@@ -1939,8 +2457,8 @@ export function Teams() {
                     </CardHeader>
                     <CardContent>
                       <div className="max-h-[28rem] space-y-2 overflow-auto rounded-lg border p-2">
-                        {tasks.length === 0 && <p className="text-xs text-muted-foreground">{t('dispatch.noTasks')}</p>}
-                        {tasks.slice(0, 50).map((task) => {
+                        {visibleTasks.length === 0 && <p className="text-xs text-muted-foreground">{t('dispatch.noTasks')}</p>}
+                        {visibleTasks.slice(0, 50).map((task) => {
                           const role = selectedTeam.roles.find((item) => item.id === task.assignedRoleId);
                           return (
                             <div key={task.id} className={cn(teamsPanelClass, 'space-y-1 p-3')}>

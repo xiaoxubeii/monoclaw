@@ -6,12 +6,11 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
+import { controlPanelClass, controlSurfaceCardClass } from '@/pages/control/styles';
 import type { AssistantDataStatusPayload } from './types';
 
-const monoclawCoreCardClass =
-  'border-border/70 bg-gradient-to-br from-background via-background to-cyan-500/[0.05] shadow-[0_20px_60px_-36px_rgba(34,211,238,0.35)]';
-const monoclawCorePanelClass =
-  'rounded-xl border border-border/60 bg-background/60 p-3 backdrop-blur-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]';
+const monoclawCoreCardClass = controlSurfaceCardClass;
+const monoclawCorePanelClass = cn(controlPanelClass, 'p-3');
 
 interface PathEntry {
   label: string;

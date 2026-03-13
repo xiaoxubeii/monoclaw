@@ -4,14 +4,14 @@
  * with markdown, thinking sections, images, and tool cards.
  */
 import { useState, useCallback, useEffect, memo } from 'react';
-import { User, Sparkles, Copy, Check, ChevronDown, ChevronRight, Wrench, FileText, Film, Music, FileArchive, File, X, FolderOpen, ZoomIn, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { User, Sparkles, ChevronDown, ChevronRight, Wrench, FileText, Film, Music, FileArchive, File, X, FolderOpen, ZoomIn, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
+import { cn, formatRelativeTime } from '@/lib/utils';
 import type { RawMessage, AttachedFileMeta } from '@/stores/chat';
-import { extractText, extractThinking, extractImages, extractToolUse, formatTimestamp } from './message-utils';
+import { extractTextForDisplay, extractThinking, extractImages, extractToolUse } from './message-utils';
 
 interface ChatMessageProps {
   message: RawMessage;
@@ -36,6 +36,12 @@ function imageSrc(img: ExtractedImage): string | null {
   return null;
 }
 
+function formatMessageRelativeTime(timestamp?: number): string | null {
+  if (!timestamp) return null;
+  const ms = timestamp < 1e12 ? timestamp * 1000 : timestamp;
+  return formatRelativeTime(new Date(ms));
+}
+
 export const ChatMessage = memo(function ChatMessage({
   message,
   showThinking,
@@ -45,13 +51,15 @@ export const ChatMessage = memo(function ChatMessage({
   const isUser = message.role === 'user';
   const role = typeof message.role === 'string' ? message.role.toLowerCase() : '';
   const isToolResult = role === 'toolresult' || role === 'tool_result';
-  const text = extractText(message);
+  const roleLabel = isUser ? 'You' : role === 'system' ? 'System' : 'Assistant';
+  const relativeTime = formatMessageRelativeTime(message.timestamp);
+  const text = extractTextForDisplay(message, { hideInternalAssistantTrace: !showThinking });
   const hasText = text.trim().length > 0;
   const thinking = extractThinking(message);
   const images = extractImages(message);
   const tools = extractToolUse(message);
   const visibleThinking = showThinking ? thinking : null;
-  const visibleTools = tools;
+  const visibleTools = showThinking ? tools : [];
 
   const attachedFiles = message._attachedFiles || [];
   const [lightboxImg, setLightboxImg] = useState<{ src: string; fileName: string; filePath?: string; base64?: string; mimeType?: string } | null>(null);
@@ -59,7 +67,7 @@ export const ChatMessage = memo(function ChatMessage({
   // Never render tool result messages in chat UI
   if (isToolResult) return null;
 
-  const hasStreamingToolStatus = isStreaming && streamingTools.length > 0;
+  const hasStreamingToolStatus = showThinking && isStreaming && streamingTools.length > 0;
   if (!hasText && !visibleThinking && images.length === 0 && visibleTools.length === 0 && attachedFiles.length === 0 && !hasStreamingToolStatus) return null;
 
   return (
@@ -88,9 +96,16 @@ export const ChatMessage = memo(function ChatMessage({
           isUser ? 'items-end' : 'items-start',
         )}
       >
-        {isStreaming && !isUser && streamingTools.length > 0 && (
+        {showThinking && isStreaming && !isUser && streamingTools.length > 0 && (
           <ToolStatusBar tools={streamingTools} />
         )}
+
+        <div className={cn('flex items-center gap-2', isUser && 'justify-end')}>
+          <span className="text-sm font-medium">{roleLabel}</span>
+          {relativeTime && (
+            <span className="text-xs text-muted-foreground">{relativeTime}</span>
+          )}
+        </div>
 
         {/* Thinking section */}
         {visibleThinking && (
@@ -218,17 +233,6 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         )}
 
-        {/* Hover row for user messages — timestamp only */}
-        {isUser && message.timestamp && (
-          <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">
-            {formatTimestamp(message.timestamp)}
-          </span>
-        )}
-
-        {/* Hover row for assistant messages — only when there is real text content */}
-        {!isUser && hasText && (
-          <AssistantHoverBar text={text} timestamp={message.timestamp} />
-        )}
       </div>
 
       {/* Image lightbox portal */}
@@ -292,34 +296,6 @@ function ToolStatusBar({
           </div>
         );
       })}
-    </div>
-  );
-}
-
-// ── Assistant hover bar (timestamp + copy, shown on group hover) ─
-
-function AssistantHoverBar({ text, timestamp }: { text: string; timestamp?: number }) {
-  const [copied, setCopied] = useState(false);
-
-  const copyContent = useCallback(() => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [text]);
-
-  return (
-    <div className="flex items-center justify-between w-full opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none px-1">
-      <span className="text-xs text-muted-foreground">
-        {timestamp ? formatTimestamp(timestamp) : ''}
-      </span>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-6 w-6"
-        onClick={copyContent}
-      >
-        {copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
-      </Button>
     </div>
   );
 }

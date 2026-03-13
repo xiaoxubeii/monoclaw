@@ -8,6 +8,12 @@ import { useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { cn } from '@/lib/utils';
+import {
+  controlHeroAuraClass,
+  controlHeroCardClass,
+  controlPanelClass,
+} from '@/pages/control/styles';
 import { SUPPORTED_LANGUAGES } from '@/i18n';
 import { useGatewayStore } from '@/stores/gateway';
 import { useSettingsStore } from '@/stores/settings';
@@ -381,8 +387,8 @@ export function Settings() {
 
   return (
     <div className="space-y-6">
-      <Card className="relative overflow-hidden border-border/70 bg-background/80 shadow-[0_24px_80px_-42px_rgba(59,130,246,0.45)]">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.18),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(14,165,233,0.12),transparent_28%)]" />
+      <Card className={controlHeroCardClass}>
+        <div className={controlHeroAuraClass} />
         <CardContent className="relative flex flex-col gap-5 p-6 xl:flex-row xl:items-end xl:justify-between">
           <div className="space-y-3">
             <div>
@@ -390,13 +396,13 @@ export function Settings() {
               <p className="text-muted-foreground">{t('subtitle')}</p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="flex h-[116px] flex-col justify-between rounded-xl border border-border/60 bg-background/60 p-4 text-left backdrop-blur-sm">
+              <div className={cn(controlPanelClass, 'flex h-[116px] flex-col justify-between p-4 text-left')}>
                 <p className="text-sm font-medium text-foreground/88">{t('appearance.title')}</p>
                 <p className="text-xs text-muted-foreground">{selectedThemeLabel}</p>
                 <p className="text-xs text-muted-foreground">{selectedLanguageLabel}</p>
               </div>
 
-              <div className="flex h-[116px] flex-col justify-between rounded-xl border border-border/60 bg-background/60 p-4 text-left backdrop-blur-sm">
+              <div className={cn(controlPanelClass, 'flex h-[116px] flex-col justify-between p-4 text-left')}>
                 <p className="text-sm font-medium text-foreground/88">{t('aiProviders.title')}</p>
                 <p className="text-xs text-muted-foreground">
                   {localModelStatus?.defaultModel || t('localModel.status.runtimeVersionUnknown')}
@@ -406,7 +412,7 @@ export function Settings() {
                 </Badge>
               </div>
 
-              <div className="flex h-[116px] flex-col justify-between rounded-xl border border-border/60 bg-background/60 p-4 text-left backdrop-blur-sm">
+              <div className={cn(controlPanelClass, 'flex h-[116px] flex-col justify-between p-4 text-left')}>
                 <p className="text-sm font-medium text-foreground/88">{t('gateway.title')}</p>
                 <p className="text-xs text-muted-foreground">{t('gateway.port')}: {gatewayStatus.port}</p>
                 <div className="flex flex-wrap gap-2">
@@ -415,7 +421,7 @@ export function Settings() {
                 </div>
               </div>
 
-              <div className="flex h-[116px] flex-col justify-between rounded-xl border border-border/60 bg-background/60 p-4 text-left backdrop-blur-sm">
+              <div className={cn(controlPanelClass, 'flex h-[116px] flex-col justify-between p-4 text-left')}>
                 <p className="text-sm font-medium text-foreground/88">{t('updates.title')}</p>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant={autoCheckUpdate ? 'success' : 'secondary'}>{t('updates.autoCheck')}</Badge>

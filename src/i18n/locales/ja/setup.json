@@ -18,7 +18,7 @@
     },
     "installing": {
       "title": "セットアップ中",
-      "description": "必須コンポーネントをインストール中"
+      "description": "プリバンドル済みコンポーネントを有効化中"
     },
     "complete": {
       "title": "完了！",
@@ -75,7 +75,7 @@
     "storedLocally": "API キーはローカルマシンに保存されます。",
     "localModel": {
       "title": "ワンクリック ローカルモデル",
-      "description": "Ollama の導入・モデル取得・既定プロバイダー設定を一括実行します。",
+      "description": "Ollama をインストールし、プリセットモデルを取得して、デフォルトプロバイダーに設定します。",
       "refresh": "更新",
       "runtimeReady": "Ollama インストール済み",
       "runtimeMissing": "Ollama 未インストール",
@@ -120,19 +120,19 @@
     "configureAnother": "別のチャンネルを構成"
   },
   "installing": {
-    "title": "必須コンポーネントをインストール中",
-    "subtitle": "AIアシスタントに必要なツールをセットアップしています",
+    "title": "プリバンドル済みコンポーネントを有効化",
+    "subtitle": "アプリ内に同梱済みの要素のみを確認・有効化します。リアルタイムのダウンロードは行いません。",
     "progress": "進捗",
     "status": {
-      "pending": "待機中",
-      "installing": "インストール中...",
-      "installed": "インストール済み",
+      "pending": "待機",
+      "installing": "有効化中...",
+      "installed": "有効化済み",
       "failed": "失敗"
     },
-    "error": "セットアップエラー：",
+    "error": "プリバンドル済みコンポーネント確認エラー",
     "restart": "アプリを再起動してください",
-    "wait": "これには少し時間がかかる場合があります...",
-    "skip": "この手順をスキップ"
+    "wait": "最終セットアップを適用中...",
+    "skip": "今はスキップ"
   },
   "complete": {
     "title": "セットアップ完了！",

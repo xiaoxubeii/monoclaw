@@ -34,10 +34,18 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { SummaryTile } from '@/components/control/SummaryTile';
 import { useSkillsStore } from '@/stores/skills';
 import { useGatewayStore } from '@/stores/gateway';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { cn } from '@/lib/utils';
+import {
+  controlHeroAuraClass,
+  controlHeroCardClass,
+  controlPanelClass,
+  controlSummaryTileClass,
+  controlSurfaceCardClass,
+} from '@/pages/control/styles';
 import { toast } from 'sonner';
 import type { Skill, MarketplaceSkill } from '@/types/skill';
 import { useTranslation } from 'react-i18next';
@@ -386,7 +394,7 @@ function MarketplaceSkillCard({
 
   return (
     <Card
-      className="hover:border-primary/50 transition-colors cursor-pointer group"
+      className={cn(controlPanelClass, 'cursor-pointer transition-colors group hover:border-primary/50')}
       onClick={handleCardClick}
     >
       <CardHeader className="pb-3">
@@ -599,6 +607,7 @@ export function Skills() {
     builtIn: skills.filter(s => s.isBundled).length,
     marketplace: skills.filter(s => !s.isBundled).length,
   };
+  const enabledSkillsCount = skills.filter((skill) => skill.enabled).length;
 
   // Handle toggle
   const handleToggle = useCallback(async (skillId: string, enable: boolean) => {
@@ -715,30 +724,59 @@ export function Skills() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">{t('title')}</h1>
-          <p className="text-muted-foreground">
-            {t('subtitle')}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={fetchSkills} disabled={!isGatewayRunning}>
-            <RefreshCw className="h-4 w-4 mr-2" />
-            {t('refresh')}
-          </Button>
-          {hasInstalledSkills && (
-            <Button variant="outline" onClick={handleOpenSkillsFolder}>
-              <FolderOpen className="h-4 w-4 mr-2" />
-              {t('openFolder')}
+      <Card className={controlHeroCardClass}>
+        <div className={controlHeroAuraClass} />
+        <CardContent className="relative flex flex-col gap-5 p-6 xl:flex-row xl:items-end xl:justify-between">
+          <div className="space-y-3">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">{t('title')}</h1>
+              <p className="text-muted-foreground">{t('subtitle')}</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <SummaryTile
+                title={t('tabs.installed')}
+                value={sourceStats.all}
+                description={t('title')}
+                className={controlSummaryTileClass}
+              />
+              <SummaryTile
+                title={t('detail.enabled')}
+                value={enabledSkillsCount}
+                description={t('tabs.installed')}
+                className={controlSummaryTileClass}
+              />
+              <SummaryTile
+                title={t('detail.bundled')}
+                value={sourceStats.builtIn}
+                description={t('tabs.installed')}
+                className={controlSummaryTileClass}
+              />
+              <SummaryTile
+                title={t('detail.userInstalled')}
+                value={sourceStats.marketplace}
+                description={t('tabs.marketplace')}
+                className={controlSummaryTileClass}
+              />
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={fetchSkills} disabled={!isGatewayRunning}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              {t('refresh')}
             </Button>
-          )}
-        </div>
-      </div>
+            {hasInstalledSkills && (
+              <Button variant="outline" onClick={handleOpenSkillsFolder}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                {t('openFolder')}
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Gateway Warning */}
       {showGatewayWarning && (
-        <Card className="border-yellow-500 bg-yellow-50 dark:bg-yellow-900/10">
+        <Card className="border-yellow-500/60 bg-yellow-500/[0.08] shadow-[0_20px_45px_-36px_rgba(234,179,8,0.5)]">
           <CardContent className="py-4 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-yellow-600" />
             <span className="text-yellow-700 dark:text-yellow-400">
@@ -809,7 +847,7 @@ export function Skills() {
 
           {/* Error Display */}
           {error && (
-            <Card className="border-destructive">
+            <Card className="border-destructive/70 bg-destructive/[0.08] shadow-[0_18px_45px_-34px_rgba(239,68,68,0.45)]">
               <CardContent className="py-4 text-destructive flex items-center gap-2">
                 <AlertCircle className="h-5 w-5 shrink-0" />
                 <span>
@@ -823,7 +861,7 @@ export function Skills() {
 
           {/* Skills Grid */}
           {filteredSkills.length === 0 ? (
-            <Card>
+            <Card className={controlSurfaceCardClass}>
               <CardContent className="flex flex-col items-center justify-center py-12">
                 <Puzzle className="h-12 w-12 text-muted-foreground mb-4" />
                 <h3 className="text-lg font-medium mb-2">{t('noSkills')}</h3>
@@ -838,8 +876,9 @@ export function Skills() {
                 <Card
                   key={skill.id}
                   className={cn(
-                    'cursor-pointer hover:border-primary/50 transition-colors',
-                    skill.enabled && 'border-primary/50 bg-primary/5'
+                    controlPanelClass,
+                    'cursor-pointer transition-colors hover:border-primary/50',
+                    skill.enabled && 'border-primary/50 bg-primary/[0.08]'
                   )}
                   onClick={() => setSelectedSkill(skill)}
                 >
@@ -914,7 +953,7 @@ export function Skills() {
 
         <TabsContent value="marketplace" className="space-y-6 mt-6">
           <div className="flex flex-col gap-4">
-            <Card className="border-muted/50 bg-muted/20">
+            <Card className={controlSurfaceCardClass}>
               <CardContent className="py-4 flex items-start gap-3">
                 <ShieldCheck className="h-5 w-5 text-muted-foreground mt-0.5" />
                 <div className="text-muted-foreground">
@@ -922,7 +961,7 @@ export function Skills() {
                 </div>
               </CardContent>
             </Card>
-            <Card className="border-info/30 bg-info/5">
+            <Card className={controlSurfaceCardClass}>
               <CardContent className="py-3 text-sm flex items-start gap-2 text-muted-foreground">
                 <Download className="h-4 w-4 mt-0.5 shrink-0" />
                 <span>{t('marketplace.manualInstallHint', { path: skillsDirPath })}</span>
@@ -1021,7 +1060,7 @@ export function Skills() {
                 })}
               </div>
             ) : (
-              <Card>
+              <Card className={controlSurfaceCardClass}>
                 <CardContent className="flex flex-col items-center justify-center py-12">
                   <Package className="h-12 w-12 text-muted-foreground mb-4" />
                   <h3 className="text-lg font-medium mb-2">{t('marketplace.title')}</h3>

@@ -13,7 +13,7 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { ChatToolbar } from './ChatToolbar';
-import { extractImages, extractText, extractThinking, extractToolUse } from './message-utils';
+import { extractImages, extractTextForDisplay, extractThinking, extractToolUse } from './message-utils';
 import { useTranslation } from 'react-i18next';
 
 export function Chat() {
@@ -34,6 +34,7 @@ export function Chat() {
   const sendMessage = useChatStore((s) => s.sendMessage);
   const abortRun = useChatStore((s) => s.abortRun);
   const clearError = useChatStore((s) => s.clearError);
+  const markCurrentSessionSeen = useChatStore((s) => s.markCurrentSessionSeen);
 
   const cleanupEmptySession = useChatStore((s) => s.cleanupEmptySession);
 
@@ -67,6 +68,12 @@ export function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingMessage, sending, pendingFinal]);
 
+  useEffect(() => {
+    if (messages.length === 0) return;
+    if (sending || pendingFinal) return;
+    markCurrentSessionSeen();
+  }, [messages, sending, pendingFinal, markCurrentSessionSeen]);
+
   // Update timestamp when sending starts
   useEffect(() => {
     if (sending && streamingTimestamp === 0) {
@@ -93,15 +100,17 @@ export function Chat() {
   const streamMsg = streamingMessage && typeof streamingMessage === 'object'
     ? streamingMessage as unknown as { role?: string; content?: unknown; timestamp?: number }
     : null;
-  const streamText = streamMsg ? extractText(streamMsg) : (typeof streamingMessage === 'string' ? streamingMessage : '');
+  const streamText = streamMsg
+    ? extractTextForDisplay(streamMsg, { hideInternalAssistantTrace: !showThinking })
+    : (typeof streamingMessage === 'string' ? streamingMessage : '');
   const hasStreamText = streamText.trim().length > 0;
   const streamThinking = streamMsg ? extractThinking(streamMsg) : null;
   const hasStreamThinking = showThinking && !!streamThinking && streamThinking.trim().length > 0;
   const streamTools = streamMsg ? extractToolUse(streamMsg) : [];
-  const hasStreamTools = streamTools.length > 0;
+  const hasStreamTools = showThinking && streamTools.length > 0;
   const streamImages = streamMsg ? extractImages(streamMsg) : [];
   const hasStreamImages = streamImages.length > 0;
-  const hasStreamToolStatus = streamingTools.length > 0;
+  const hasStreamToolStatus = showThinking && streamingTools.length > 0;
   const shouldRenderStreaming = sending && (hasStreamText || hasStreamThinking || hasStreamTools || hasStreamImages || hasStreamToolStatus);
   const hasAnyStreamContent = hasStreamText || hasStreamThinking || hasStreamTools || hasStreamImages || hasStreamToolStatus;
 

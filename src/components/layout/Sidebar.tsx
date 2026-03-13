@@ -96,7 +96,7 @@ function ModeButton({ active, collapsed, icon, title, description, onClick }: Mo
       )}
     >
       <div className={cn('flex items-center gap-3', collapsed && 'justify-center')}>
-        <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-background/70 text-primary">{icon}</span>
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-background/70 text-primary">{icon}</span>
         {!collapsed && (
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">{title}</p>
@@ -123,7 +123,11 @@ export function Sidebar() {
   const currentSessionKey = useChatStore((s) => s.currentSessionKey);
   const sessionLabels = useChatStore((s) => s.sessionLabels);
   const sessionLastActivity = useChatStore((s) => s.sessionLastActivity);
+  const sessionLastAssistantAt = useChatStore((s) => s.sessionLastAssistantAt);
+  const sessionLastSeenAt = useChatStore((s) => s.sessionLastSeenAt);
+  const sessionRuntimeState = useChatStore((s) => s.sessionRuntimeState);
   const switchSession = useChatStore((s) => s.switchSession);
+  const markSessionSeen = useChatStore((s) => s.markSessionSeen);
   const newSession = useChatStore((s) => s.newSession);
   const deleteSession = useChatStore((s) => s.deleteSession);
 
@@ -136,8 +140,57 @@ export function Sidebar() {
   const mainSessions = sessions.filter((s) => s.key.endsWith(':main'));
   const otherSessions = sessions.filter((s) => !s.key.endsWith(':main'));
 
-  const getSessionLabel = (key: string, displayName?: string, label?: string) =>
-    sessionLabels[key] ?? label ?? displayName ?? key;
+  const getSessionSuffix = (sessionKey: string): string => {
+    if (!sessionKey.startsWith('agent:')) return sessionKey;
+    const parts = sessionKey.split(':');
+    if (parts.length < 3) return sessionKey;
+    return parts.slice(2).join(':');
+  };
+
+  const isGenericDisplayName = (name?: string): boolean => name?.trim().toLowerCase() === 'monoclaw';
+  const isMachineSessionName = (name?: string): boolean => {
+    if (!name) return false;
+    const normalized = name.trim().toLowerCase();
+    if (!normalized) return false;
+    if (normalized.startsWith('agent:') && normalized.includes(':session')) return true;
+    return /^session[-:_]/.test(normalized);
+  };
+
+  const getSessionLabel = (key: string, displayName?: string, label?: string) => {
+    const direct = sessionLabels[key];
+    if (direct) return direct;
+
+    const suffix = getSessionSuffix(key);
+    if (suffix !== key && sessionLabels[suffix]) {
+      return sessionLabels[suffix];
+    }
+
+    if (!key.startsWith('agent:')) {
+      const aliased = Object.entries(sessionLabels).find(([sessionKey]) => getSessionSuffix(sessionKey) === key)?.[1];
+      if (aliased) return aliased;
+    }
+
+    const backendLabel = (
+      label
+      && !isGenericDisplayName(label)
+      && !isMachineSessionName(label)
+    ) ? label : undefined;
+    const backendDisplay = (
+      displayName
+      && !isGenericDisplayName(displayName)
+      && !isMachineSessionName(displayName)
+    ) ? displayName : undefined;
+
+    if (key.endsWith(':main')) {
+      return backendLabel ?? backendDisplay ?? key;
+    }
+    const humanSuffix = suffix && !isMachineSessionName(suffix) ? suffix : undefined;
+    if (backendLabel || backendDisplay || humanSuffix) {
+      return backendLabel ?? backendDisplay ?? humanSuffix!;
+    }
+    if (!isMachineSessionName(key)) return key;
+    return t('sidebar.newChat', 'New Chat');
+  };
 
   const openDevConsole = async () => {
     try {
@@ -160,22 +213,12 @@ export function Sidebar() {
   const [sessionToDelete, setSessionToDelete] = useState<{ key: string; label: string } | null>(null);
   const [chatExpanded, setChatExpanded] = useState(true);
   const [teamsExpanded, setTeamsExpanded] = useState(true);
+  const chatSectionExpanded = chatExpanded || isOnChat;
+  const teamsSectionExpanded = teamsExpanded || isOnTeams;
 
   useEffect(() => {
     void initTeams().catch(() => {});
   }, [initTeams]);
-
-  useEffect(() => {
-    if (isOnChat) {
-      setChatExpanded(true);
-    }
-  }, [isOnChat]);
-
-  useEffect(() => {
-    if (isOnTeams) {
-      setTeamsExpanded(true);
-    }
-  }, [isOnTeams]);
 
   const workspaceNavItems = [
     { to: APP_ROUTES.workspace.skills, icon: <Puzzle className="h-5 w-5" />, label: t('sidebar.skills') },
@@ -220,17 +263,31 @@ export function Sidebar() {
     (sessionLastActivity[b.key] ?? 0) - (sessionLastActivity[a.key] ?? 0)
   )];
 
+  const conversationDotClass = (sessionKey: string) => {
+    const state = sessionRuntimeState[sessionKey] ?? 'idle';
+    const unread = (sessionLastAssistantAt[sessionKey] ?? 0) > (sessionLastSeenAt[sessionKey] ?? 0);
+    if (state === 'running') return 'bg-green-500 animate-pulse';
+    if (state === 'error') return 'bg-red-500';
+    if (unread) return 'bg-green-500';
+    return 'bg-slate-400';
+  };
+
+  const conversationDotLabel = (sessionKey: string) => {
+    const state = sessionRuntimeState[sessionKey] ?? 'idle';
+    const unread = (sessionLastAssistantAt[sessionKey] ?? 0) > (sessionLastSeenAt[sessionKey] ?? 0);
+    if (state === 'running') return t('status.running', { ns: 'teams', defaultValue: 'Running' });
+    if (state === 'error') return t('status.error', { ns: 'teams', defaultValue: 'Error' });
+    if (unread) return t('detail.unread', { ns: 'teams', defaultValue: 'Unread' });
+    return t('detail.read', { ns: 'teams', defaultValue: 'Read' });
+  };
+
   return (
     <aside
       className={cn(
         'flex shrink-0 flex-col border-r backdrop-blur-xl transition-all duration-300',
-        shellMode === 'workspace'
-          ? resolvedTheme === 'dark'
-            ? 'border-cyan-500/10 bg-slate-950/48'
-            : 'border-indigo-200/70 bg-white/78 shadow-[18px_0_45px_-32px_rgba(99,102,241,0.2)]'
-          : resolvedTheme === 'dark'
-            ? 'border-indigo-500/12 bg-slate-950/62'
-            : 'border-indigo-200/70 bg-white/78 shadow-[18px_0_45px_-32px_rgba(99,102,241,0.2)]',
+        resolvedTheme === 'dark'
+          ? 'border-cyan-500/10 bg-slate-950/48'
+          : 'border-indigo-200/70 bg-white/78 shadow-[18px_0_45px_-32px_rgba(99,102,241,0.2)]',
         sidebarCollapsed ? 'w-16' : 'w-72'
       )}
     >
@@ -300,7 +357,7 @@ export function Sidebar() {
                         className="rounded p-1 hover:bg-accent"
                         aria-label={t('sidebar.conversations', 'Conversations')}
                       >
-                        <ChevronDown className={cn('h-4 w-4 transition-transform', chatExpanded && 'rotate-180')} />
+                        <ChevronDown className={cn('h-4 w-4 transition-transform', chatSectionExpanded && 'rotate-180')} />
                       </button>
                       <button
                         onClick={createNewConversation}
@@ -312,7 +369,7 @@ export function Sidebar() {
                     </div>
                   </div>
 
-                  {chatExpanded && (
+                  {chatSectionExpanded && (
                     <div className="ml-5 max-h-64 space-y-0.5 overflow-y-auto border-l pl-2">
                       {sessions.length === 0 && (
                         <p className="px-2 py-1 text-xs text-muted-foreground">
@@ -324,11 +381,12 @@ export function Sidebar() {
                         <div key={session.key} className="group relative flex items-center">
                           <button
                             onClick={() => {
+                              markSessionSeen(session.key);
                               switchSession(session.key);
                               navigate(APP_ROUTES.workspace.chat);
                             }}
                             className={cn(
-                              'w-full truncate rounded-md px-2 py-1.5 text-left text-xs transition-colors',
+                              'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors',
                               !session.key.endsWith(':main') && 'pr-7',
                               'hover:bg-accent hover:text-accent-foreground',
                               isOnChat && currentSessionKey === session.key
@@ -336,7 +394,14 @@ export function Sidebar() {
                                 : 'text-muted-foreground',
                             )}
                           >
-                            {getSessionLabel(session.key, session.displayName, session.label)}
+                            <span
+                              className={cn('h-2 w-2 shrink-0 rounded-full', conversationDotClass(session.key))}
+                              aria-label={conversationDotLabel(session.key)}
+                              title={conversationDotLabel(session.key)}
+                            />
+                            <span className="min-w-0 flex-1 truncate">
+                              {getSessionLabel(session.key, session.displayName, session.label)}
+                            </span>
                           </button>
                           {!session.key.endsWith(':main') && (
                             <button
@@ -385,7 +450,7 @@ export function Sidebar() {
                         className="rounded p-1 hover:bg-accent"
                         aria-label={t('sidebar.teams', 'Teams')}
                       >
-                        <ChevronDown className={cn('h-4 w-4 transition-transform', teamsExpanded && 'rotate-180')} />
+                        <ChevronDown className={cn('h-4 w-4 transition-transform', teamsSectionExpanded && 'rotate-180')} />
                       </button>
                       <button
                         onClick={createNewTeam}
@@ -397,7 +462,7 @@ export function Sidebar() {
                     </div>
                   </div>
 
-                  {teamsExpanded && (
+                  {teamsSectionExpanded && (
                     <div className="ml-5 space-y-1 border-l pl-2">
                       {teamLoading && teams.length === 0 && (
                         <p className="px-2 py-1 text-xs text-muted-foreground">

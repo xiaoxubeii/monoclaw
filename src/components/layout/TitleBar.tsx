@@ -4,32 +4,24 @@
  * Windows/Linux: icon + app/shell label on left, window controls on right.
  */
 import { useState, useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
 import { Minus, Square, X, Copy } from 'lucide-react';
 import logoSvg from '@/assets/logo.svg';
 import { cn } from '@/lib/utils';
-import { resolveShellMode } from '@/lib/navigation';
 import { useResolvedTheme } from '@/hooks/useResolvedTheme';
 
 const isMac = window.electron?.platform === 'darwin';
 
 export function TitleBar() {
-  const location = useLocation();
   const resolvedTheme = useResolvedTheme();
-  const shellMode = resolveShellMode(location.pathname);
 
   if (isMac) {
     return (
       <div
         className={cn(
           'drag-region flex h-10 shrink-0 items-center justify-between border-b px-3 backdrop-blur-xl',
-          shellMode === 'control'
-            ? resolvedTheme === 'dark'
-              ? 'border-indigo-500/12 bg-slate-950/70'
-              : 'border-indigo-200/80 bg-white/78'
-            : resolvedTheme === 'dark'
-              ? 'border-cyan-500/10 bg-slate-950/52'
-              : 'border-indigo-200/80 bg-white/78'
+          resolvedTheme === 'dark'
+            ? 'border-cyan-500/10 bg-slate-950/52'
+            : 'border-indigo-200/80 bg-white/78'
         )}
       >
         <div className="no-drag flex items-center gap-2 opacity-0">
@@ -41,14 +33,12 @@ export function TitleBar() {
     );
   }
 
-  return <WindowsTitleBar shellMode={shellMode} resolvedTheme={resolvedTheme} />;
+  return <WindowsTitleBar resolvedTheme={resolvedTheme} />;
 }
 
 function WindowsTitleBar({
-  shellMode,
   resolvedTheme,
 }: {
-  shellMode: 'workspace' | 'control' | null;
   resolvedTheme: 'light' | 'dark';
 }) {
   const [maximized, setMaximized] = useState(false);
@@ -79,13 +69,9 @@ function WindowsTitleBar({
     <div
       className={cn(
         'drag-region flex h-10 shrink-0 items-center justify-between border-b backdrop-blur-xl',
-        shellMode === 'control'
-          ? resolvedTheme === 'dark'
-            ? 'border-indigo-500/12 bg-slate-950/72'
-            : 'border-indigo-200/80 bg-white/80'
-          : resolvedTheme === 'dark'
-            ? 'border-cyan-500/10 bg-slate-950/54'
-            : 'border-indigo-200/80 bg-white/80'
+        resolvedTheme === 'dark'
+          ? 'border-cyan-500/10 bg-slate-950/54'
+          : 'border-indigo-200/80 bg-white/80'
       )}
     >
       <div className="no-drag flex items-center gap-3 pl-3">

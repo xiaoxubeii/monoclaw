@@ -22,12 +22,11 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { ProvidersSettings } from '@/components/settings/ProvidersSettings';
 import { UpdateSettings } from '@/components/settings/UpdateSettings';
+import { controlPanelClass, controlSurfaceCardClass } from '@/pages/control/styles';
 import type { LocalModelPresetId, LocalModelStatus } from '@/types/local-model';
 
-const settingsCardClass =
-  'border-border/70 bg-gradient-to-br from-background via-background to-blue-500/[0.04] shadow-[0_20px_60px_-36px_rgba(59,130,246,0.32)]';
-const settingsPanelClass =
-  'rounded-xl border border-border/60 bg-background/60 backdrop-blur-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]';
+const settingsCardClass = controlSurfaceCardClass;
+const settingsPanelClass = controlPanelClass;
 
 interface LanguageOption {
   code: string;
@@ -216,7 +215,12 @@ export function LocalModelSettingsCard({
                   {isDefaultPreset && <Badge variant="success">{t('localModel.status.defaultPreset')}</Badge>}
                 </div>
 
-                <Button size="sm" className="w-full" onClick={() => onEnablePreset(preset.id)} disabled={localModelAction !== 'idle'}>
+                <Button
+                  size="sm"
+                  className="w-full"
+                  onClick={() => onEnablePreset(preset.id)}
+                  disabled={localModelAction !== 'idle'}
+                >
                   <RefreshCw className={`mr-2 h-4 w-4${isBusy ? ' animate-spin' : ''}`} />
                   {isBusy ? t('localModel.actions.enabling') : (isDefaultPreset ? t('localModel.actions.enabled') : t('localModel.actions.enable'))}
                 </Button>

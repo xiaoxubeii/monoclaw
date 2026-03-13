@@ -51,7 +51,7 @@
     "running": "运行中",
     "starting": "启动中",
     "stopped": "已停止",
-    "hibernating": "休眠中",
+    "hibernating": "停止中",
     "error": "错误",
     "idle": "空闲",
     "busy": "忙碌",

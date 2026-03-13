@@ -124,6 +124,8 @@ const electronAPI = {
         // UV
         'uv:check',
         'uv:install-all',
+        // Setup
+        'setup:prepareOffline',
         // Skill config (direct file access)
         'skill:updateConfig',
         'skill:getConfig',

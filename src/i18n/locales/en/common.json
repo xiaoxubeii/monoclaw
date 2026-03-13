@@ -51,7 +51,7 @@
     "running": "Running",
     "starting": "Starting",
     "stopped": "Stopped",
-    "hibernating": "Hibernating",
+    "hibernating": "Stopping",
     "error": "Error",
     "idle": "Idle",
     "busy": "Busy",

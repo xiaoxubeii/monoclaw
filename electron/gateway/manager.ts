@@ -20,7 +20,7 @@ import { getProviderEnvVar, getKeyableProviderTypes } from '../utils/provider-re
 import { GatewayEventType, JsonRpcNotification, isNotification, isResponse } from './protocol';
 import { logger } from '../utils/logger';
 import { getUvMirrorEnv } from '../utils/uv-env';
-import { isPythonReady, setupManagedPython } from '../utils/uv-setup';
+import { isPythonReady } from '../utils/uv-setup';
 import {
   loadOrCreateDeviceIdentity,
   signDevicePayload,
@@ -396,14 +396,13 @@ export class GatewayManager extends EventEmitter {
     this.setStatus({ state: 'starting', reconnectAttempts: 0 });
     let configRepairAttempted = false;
 
-    // Check if Python environment is ready (self-healing) asynchronously.
-    // Fire-and-forget: only needs to run once, not on every retry.
+    // Check Python readiness in the background.
+    // Setup flow is offline-first; avoid implicit downloads during startup.
     void isPythonReady().then(pythonReady => {
       if (!pythonReady) {
-        logger.info('Python environment missing or incomplete, attempting background repair...');
-        void setupManagedPython().catch(err => {
-          logger.error('Background Python repair failed:', err);
-        });
+        logger.info(
+          'Managed Python is not ready. Skipping auto-install to keep startup download-free.'
+        );
       }
     }).catch(err => {
       logger.error('Failed to check Python environment:', err);

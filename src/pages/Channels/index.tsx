@@ -5,11 +5,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Plus,
-  Radio,
   RefreshCw,
   Trash2,
-  Power,
-  PowerOff,
   QrCode,
   Loader2,
   X,
@@ -29,10 +26,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { SummaryTile } from '@/components/control/SummaryTile';
 import { useChannelsStore } from '@/stores/channels';
 import { useGatewayStore } from '@/stores/gateway';
 import { StatusBadge, type Status } from '@/components/common/StatusBadge';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { cn } from '@/lib/utils';
+import {
+  controlHeroAuraClass,
+  controlHeroCardClass,
+  controlPanelClass,
+  controlSummaryTileClass,
+  controlSurfaceCardClass,
+} from '@/pages/control/styles';
 import {
   CHANNEL_ICONS,
   CHANNEL_NAMES,
@@ -110,71 +116,51 @@ export function Channels() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">{t('title')}</h1>
-          <p className="text-muted-foreground">
-            {t('subtitle')}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={fetchChannels}>
-            <RefreshCw className="h-4 w-4 mr-2" />
-            {t('refresh')}
-          </Button>
-          <Button onClick={() => setShowAddDialog(true)}>
-            <Plus className="h-4 w-4 mr-2" />
-            {t('addChannel')}
-          </Button>
-        </div>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-4">
-              <div className="rounded-full bg-primary/10 p-3">
-                <Radio className="h-6 w-6 text-primary" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{channels.length}</p>
-                <p className="text-sm text-muted-foreground">{t('stats.total')}</p>
-              </div>
+      <Card className={controlHeroCardClass}>
+        <div className={controlHeroAuraClass} />
+        <CardContent className="relative flex flex-col gap-5 p-6 xl:flex-row xl:items-end xl:justify-between">
+          <div className="space-y-3">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">{t('title')}</h1>
+              <p className="text-muted-foreground">{t('subtitle')}</p>
             </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-4">
-              <div className="rounded-full bg-green-100 p-3 dark:bg-green-900">
-                <Power className="h-6 w-6 text-green-600" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{connectedCount}</p>
-                <p className="text-sm text-muted-foreground">{t('stats.connected')}</p>
-              </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <SummaryTile
+                title={t('stats.total')}
+                value={channels.length}
+                description={t('configured')}
+                className={controlSummaryTileClass}
+              />
+              <SummaryTile
+                title={t('stats.connected')}
+                value={connectedCount}
+                description={t('stats.connected')}
+                className={controlSummaryTileClass}
+              />
+              <SummaryTile
+                title={t('stats.disconnected')}
+                value={channels.length - connectedCount}
+                description={t('stats.disconnected')}
+                className={controlSummaryTileClass}
+              />
             </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-4">
-              <div className="rounded-full bg-slate-100 p-3 dark:bg-slate-800">
-                <PowerOff className="h-6 w-6 text-slate-600" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{channels.length - connectedCount}</p>
-                <p className="text-sm text-muted-foreground">{t('stats.disconnected')}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={fetchChannels}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              {t('refresh')}
+            </Button>
+            <Button onClick={() => setShowAddDialog(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              {t('addChannel')}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Gateway Warning */}
       {gatewayStatus.state !== 'running' && (
-        <Card className="border-yellow-500 bg-yellow-50 dark:bg-yellow-900/10">
+        <Card className="border-yellow-500/60 bg-yellow-500/[0.08] shadow-[0_20px_45px_-36px_rgba(234,179,8,0.5)]">
           <CardContent className="py-4 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-yellow-500" />
             <span className="text-yellow-700 dark:text-yellow-400">
@@ -186,7 +172,7 @@ export function Channels() {
 
       {/* Error Display */}
       {error && (
-        <Card className="border-destructive">
+        <Card className="border-destructive/70 bg-destructive/[0.08] shadow-[0_18px_45px_-34px_rgba(239,68,68,0.45)]">
           <CardContent className="py-4 text-destructive">
             {error}
           </CardContent>
@@ -195,7 +181,7 @@ export function Channels() {
 
       {/* Configured Channels */}
       {channels.length > 0 && (
-        <Card>
+        <Card className={controlSurfaceCardClass}>
           <CardHeader>
             <CardTitle>{t('configured')}</CardTitle>
             <CardDescription>{t('configuredDesc')}</CardDescription>
@@ -215,7 +201,7 @@ export function Channels() {
       )}
 
       {/* Available Channels */}
-      <Card>
+      <Card className={controlSurfaceCardClass}>
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
@@ -234,7 +220,11 @@ export function Channels() {
               return (
                 <button
                   key={type}
-                  className={`p-4 rounded-lg border hover:bg-accent transition-colors text-left relative ${isConfigured ? 'border-green-500/50 bg-green-500/5' : ''}`}
+                  className={cn(
+                    controlPanelClass,
+                    'relative p-4 text-left transition-colors hover:border-border hover:bg-accent/45',
+                    isConfigured && 'border-primary/45 bg-primary/[0.08]'
+                  )}
                   onClick={() => {
                     setSelectedChannelType(type);
                     setShowAddDialog(true);
@@ -308,7 +298,7 @@ interface ChannelCardProps {
 
 function ChannelCard({ channel, onDelete }: ChannelCardProps) {
   return (
-    <Card>
+    <Card className={controlPanelClass}>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">

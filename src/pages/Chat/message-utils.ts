@@ -5,6 +5,11 @@
  */
 import type { RawMessage, ContentBlock } from '@/stores/chat';
 
+interface ExtractTextOptions {
+  // Hide leaked internal reasoning/tool transcripts for normal-user mode.
+  hideInternalAssistantTrace?: boolean;
+}
+
 /**
  * Clean Gateway metadata from user message text for display.
  * Strips: [media attached: ... | ...], [message_id: ...],
@@ -31,10 +36,37 @@ function cleanUserText(text: string): string {
  * For user messages, strips Gateway-injected metadata.
  */
 export function extractText(message: RawMessage | unknown): string {
+  return extractTextWithOptions(message, {});
+}
+
+function looksLikeInternalAssistantTrace(text: string): boolean {
+  const normalized = text.replace(/\r/g, '').trim();
+  if (!normalized) return false;
+
+  const startsWithThinking = /^(thinking|analysis)\b/i.test(normalized);
+  const hasPlanningPhrase = /\bthe user is asking me\b/i.test(normalized) || /\blet me\b/i.test(normalized);
+  const hasToolCommandBlock = /\n(?:read|write|edit|open|find|search|bash|shell|exec|apply_patch)\s*\n\{/i.test(normalized);
+  const hasWorkspacePath = /"path"\s*:\s*"\/Users\//.test(normalized);
+  const hasRolePromptMeta = /\bIDENTITY\.md\b|\bSOUL\.md\b/.test(normalized);
+
+  if (startsWithThinking && (hasPlanningPhrase || hasToolCommandBlock || hasWorkspacePath || hasRolePromptMeta)) {
+    return true;
+  }
+
+  // Tool transcript without explicit "Thinking" prefix.
+  if (hasToolCommandBlock && (hasWorkspacePath || hasRolePromptMeta)) {
+    return true;
+  }
+
+  return false;
+}
+
+function extractTextWithOptions(message: RawMessage | unknown, options: ExtractTextOptions): string {
   if (!message || typeof message !== 'object') return '';
   const msg = message as Record<string, unknown>;
   const content = msg.content;
   const isUser = msg.role === 'user';
+  const isAssistant = msg.role === 'assistant';
 
   let result = '';
 
@@ -61,7 +93,20 @@ export function extractText(message: RawMessage | unknown): string {
     result = cleanUserText(result);
   }
 
+  if (options.hideInternalAssistantTrace && isAssistant && result) {
+    if (looksLikeInternalAssistantTrace(result)) {
+      return '';
+    }
+  }
+
   return result;
+}
+
+export function extractTextForDisplay(
+  message: RawMessage | unknown,
+  options: ExtractTextOptions = {},
+): string {
+  return extractTextWithOptions(message, options);
 }
 
 /**

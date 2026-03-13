@@ -53,8 +53,13 @@ import {
   validateChannelConfig,
   validateChannelCredentials,
 } from '../utils/channel-config';
-import { checkUvInstalled, installUv, setupManagedPython } from '../utils/uv-setup';
-import { updateSkillConfig, getSkillConfig, getAllSkillConfigs } from '../utils/skill-config';
+import { checkUvInstalled, isPythonReady } from '../utils/uv-setup';
+import {
+  updateSkillConfig,
+  getSkillConfig,
+  getAllSkillConfigs,
+  ensureBuiltinSkillsInstalled,
+} from '../utils/skill-config';
 import { whatsAppLoginManager } from '../utils/whatsapp-login';
 import { getProviderConfig } from '../utils/provider-registry';
 import { getProviderDefaultModel } from '../utils/provider-registry';
@@ -62,7 +67,7 @@ import { deviceOAuthManager, OAuthProviderType } from '../utils/device-oauth';
 import { applyProxySettings } from './proxy';
 import { proxyAwareFetch } from '../utils/proxy-fetch';
 import { getRecentTokenUsageHistory } from '../utils/token-usage';
-import { TeamOrchestrator } from '../team/orchestrator';
+import { TeamOrchestrator, type TeamGatewayRpc } from '../team/orchestrator';
 import type {
   CreateTeamPayload,
   DispatchTaskPayload,
@@ -159,9 +164,9 @@ async function getProviderFallbackModelRefs(config: ProviderConfig): Promise<str
 let teamOrchestratorSingleton: TeamOrchestrator | null = null;
 let teamShutdownHookRegistered = false;
 
-function getTeamOrchestrator(): TeamOrchestrator {
+function getTeamOrchestrator(gatewayRpc?: TeamGatewayRpc): TeamOrchestrator {
   if (!teamOrchestratorSingleton) {
-    teamOrchestratorSingleton = new TeamOrchestrator();
+    teamOrchestratorSingleton = new TeamOrchestrator({ gatewayRpc });
   }
 
   if (!teamShutdownHookRegistered) {
@@ -231,8 +236,18 @@ export function registerIpcHandlers(
   clawHubService: ClawHubService,
   mainWindow: BrowserWindow
 ): void {
-  const teamOrchestrator = getTeamOrchestrator();
   const localModelManager = getLocalModelManager();
+  const teamGatewayRpc: TeamGatewayRpc = async <T>(
+    method: string,
+    params?: unknown,
+    timeoutMs?: number,
+  ): Promise<T> => {
+    if (method === 'chat.send') {
+      await ensureLocalModelReadyForChat(localModelManager);
+    }
+    return gatewayManager.rpc<T>(method, params, timeoutMs);
+  };
+  const teamOrchestrator = getTeamOrchestrator(teamGatewayRpc);
   const opsOrchestrator = getOpsOrchestrator(gatewayManager, teamOrchestrator, localModelManager);
 
   // Gateway handlers
@@ -270,6 +285,9 @@ export function registerIpcHandlers(
 
   // UV handlers
   registerUvHandlers();
+
+  // Setup preparation handlers
+  registerSetupHandlers();
 
   // Log handlers (for UI to read gateway/app logs)
   registerLogHandlers();
@@ -552,19 +570,86 @@ function registerUvHandlers(): void {
     return await checkUvInstalled();
   });
 
-  // Install uv and setup managed Python
+  // Legacy compatibility endpoint: only check readiness, no downloads.
   ipcMain.handle('uv:install-all', async () => {
     try {
-      const isInstalled = await checkUvInstalled();
-      if (!isInstalled) {
-        await installUv();
-      }
-      // Always run python setup to ensure it exists in uv's cache
-      await setupManagedPython();
-      return { success: true };
+      const uvInstalled = await checkUvInstalled();
+      const pythonReady = uvInstalled ? await isPythonReady() : false;
+      return {
+        success: uvInstalled,
+        uvInstalled,
+        pythonReady,
+        error: uvInstalled
+          ? undefined
+          : 'Bundled uv binary is missing; please use a complete package build.',
+      };
     } catch (error) {
-      console.error('Failed to setup uv/python:', error);
+      console.error('Failed to check uv/python readiness:', error);
       return { success: false, error: String(error) };
+    }
+  });
+}
+
+const SETUP_BUILTIN_SKILLS = [
+  'feishu-doc',
+  'feishu-drive',
+  'feishu-perm',
+  'feishu-wiki',
+] as const;
+
+interface SetupPreparationComponent {
+  id: 'openclaw-runtime' | 'uv-runtime' | 'builtin-skills';
+  ready: boolean;
+  message: string;
+}
+
+function registerSetupHandlers(): void {
+  ipcMain.handle('setup:prepareOffline', async () => {
+    try {
+      const components: SetupPreparationComponent[] = [];
+
+      const openclaw = getOpenClawStatus();
+      const openclawReady = openclaw.packageExists && openclaw.isBuilt;
+      components.push({
+        id: 'openclaw-runtime',
+        ready: openclawReady,
+        message: openclawReady
+          ? `OpenClaw runtime is bundled (${openclaw.version ?? 'unknown version'}).`
+          : `OpenClaw runtime missing or broken at ${openclaw.dir}.`,
+      });
+
+      const uvReady = await checkUvInstalled();
+      components.push({
+        id: 'uv-runtime',
+        ready: uvReady,
+        message: uvReady
+          ? 'Bundled uv binary is ready.'
+          : 'Bundled uv binary not found for current platform.',
+      });
+
+      await ensureBuiltinSkillsInstalled();
+      const missingSkills = SETUP_BUILTIN_SKILLS.filter((slug) => {
+        const skillManifest = join(getOpenClawSkillsDir(), slug, 'SKILL.md');
+        return !existsSync(skillManifest);
+      });
+      const builtinSkillsReady = missingSkills.length === 0;
+      components.push({
+        id: 'builtin-skills',
+        ready: builtinSkillsReady,
+        message: builtinSkillsReady
+          ? 'Built-in skill pack is ready.'
+          : `Missing built-in skills: ${missingSkills.join(', ')}`,
+      });
+
+      return {
+        success: components.every((component) => component.ready),
+        components,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: String(error),
+      };
     }
   });
 }

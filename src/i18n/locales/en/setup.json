@@ -18,7 +18,7 @@
     },
     "installing": {
       "title": "Setting Up",
-      "description": "Installing essential components"
+      "description": "Enabling pre-bundled components"
     },
     "complete": {
       "title": "All Set!",
@@ -120,19 +120,19 @@
     "configureAnother": "Configure another channel"
   },
   "installing": {
-    "title": "Installing Essential Components",
-    "subtitle": "Setting up the tools needed to power your AI assistant",
+    "title": "Enable Pre-Bundled Components",
+    "subtitle": "Checking and enabling in-app components only. No real-time downloads.",
     "progress": "Progress",
     "status": {
-      "pending": "Pending",
-      "installing": "Installing...",
-      "installed": "Installed",
+      "pending": "Queued",
+      "installing": "Enabling...",
+      "installed": "Enabled",
       "failed": "Failed"
     },
-    "error": "Setup Error:",
+    "error": "Pre-bundled component check failed",
     "restart": "Try restarting the app",
-    "wait": "This may take a few moments...",
-    "skip": "Skip this step"
+    "wait": "Applying final setup...",
+    "skip": "Skip for now"
   },
   "complete": {
     "title": "Setup Complete!",

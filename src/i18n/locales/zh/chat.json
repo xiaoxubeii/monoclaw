@@ -12,7 +12,7 @@
     "noLogs": "（暂无日志）",
     "toolbar": {
         "refresh": "刷新聊天",
-        "showThinking": "显示思考过程",
-        "hideThinking": "隐藏思考过程"
+        "showThinking": "显示中间步骤（调试）",
+        "hideThinking": "隐藏中间步骤（调试）"
     }
 }

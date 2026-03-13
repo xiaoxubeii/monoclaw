@@ -5,10 +5,10 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { controlPanelClass } from '@/pages/control/styles';
 import type { OpsActionRecord, OpsEvent, OpsStatusPayload, OpsSubsystem } from '@/types/ops';
 
-const opsPanelClass =
-  'rounded-xl border border-border/60 bg-gradient-to-br from-background/80 via-background/70 to-emerald-500/[0.05] backdrop-blur-sm shadow-[0_20px_60px_-36px_rgba(16,185,129,0.3)]';
+const opsPanelClass = controlPanelClass;
 
 export const OPS_SUBSYSTEM_KEYS: OpsSubsystem[] = [
   'gateway',

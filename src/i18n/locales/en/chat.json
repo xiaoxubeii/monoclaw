@@ -12,7 +12,7 @@
     "noLogs": "(No logs available yet)",
     "toolbar": {
         "refresh": "Refresh chat",
-        "showThinking": "Show thinking",
-        "hideThinking": "Hide thinking"
+        "showThinking": "Show intermediate steps (debug)",
+        "hideThinking": "Hide intermediate steps (debug)"
     }
 }

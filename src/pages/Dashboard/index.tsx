@@ -6,6 +6,11 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, CardContent } from '@/components/ui/card';
 import { SummaryTile } from '@/components/control/SummaryTile';
+import {
+  controlHeroAuraClass,
+  controlHeroCardClass,
+  controlSummaryTileClass,
+} from '@/pages/control/styles';
 import { useChannelsStore } from '@/stores/channels';
 import { useGatewayStore } from '@/stores/gateway';
 import { useSkillsStore } from '@/stores/skills';
@@ -81,8 +86,8 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <Card className="relative overflow-hidden border-border/70 bg-background/80 shadow-[0_24px_80px_-42px_rgba(56,189,248,0.55)]">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.18),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(99,102,241,0.14),transparent_28%)]" />
+      <Card className={controlHeroCardClass}>
+        <div className={controlHeroAuraClass} />
         <CardContent className="relative flex flex-col gap-5 p-6 xl:flex-row xl:items-end xl:justify-between">
           <div className="space-y-3">
             <div>
@@ -94,25 +99,25 @@ export function Dashboard() {
                 title={t('gateway')}
                 value={gatewayStatus.state}
                 description={isGatewayRunning ? t('sinceRestart') : t('gatewayNotRunning')}
-                className="bg-background/60 backdrop-blur-sm"
+                className={controlSummaryTileClass}
               />
               <SummaryTile
                 title={t('channels')}
                 value={`${connectedChannels}/${channels.length}`}
                 description={t('connectedOf', { connected: connectedChannels, total: channels.length })}
-                className="bg-background/60 backdrop-blur-sm"
+                className={controlSummaryTileClass}
               />
               <SummaryTile
                 title={t('skills')}
                 value={`${enabledSkills}/${skills.length}`}
                 description={t('enabledOf', { enabled: enabledSkills, total: skills.length })}
-                className="bg-background/60 backdrop-blur-sm"
+                className={controlSummaryTileClass}
               />
               <SummaryTile
                 title={t('uptime')}
                 value={uptime > 0 ? formatUptime(uptime) : '—'}
                 description={isGatewayRunning ? t('sinceRestart') : t('gatewayNotRunning')}
-                className="bg-background/60 backdrop-blur-sm"
+                className={controlSummaryTileClass}
               />
             </div>
           </div>

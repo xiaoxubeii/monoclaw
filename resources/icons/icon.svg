@@ -15,6 +15,7 @@
     <feDropShadow dx="-0.35" dy="-0.35" stdDeviation="0.45" flood-color="#FFFFFF" flood-opacity="0.12"/>
   </filter>
 </defs>
+<rect x="0" y="0" width="97" height="96" rx="20" fill="#000000"/>
 <path d="M22.361 17.7177C25.4158 17.7177 27.9818 15.1517 27.9818 12.0969C27.9818 9.04214 25.4158 6.47613 22.361 6.47613C19.3062 6.47613 16.7402 9.04214 16.7402 12.0969C16.7402 15.1517 19.3062 17.7177 22.361 17.7177Z" fill="url(#monoclawBaseGrad)" filter="url(#monoclawDepth)" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="0.6"/>
 <path d="M19.3062 57.4298C19.3062 58.2852 20.0393 59.0183 20.8947 59.0183C21.75 59.0183 22.4832 58.2852 22.4832 57.4298C22.4832 56.5745 21.75 55.8413 20.8947 55.8413C20.0393 55.8413 19.3062 56.5745 19.3062 57.4298Z" fill="url(#monoclawBaseGrad)" filter="url(#monoclawDepth)" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="0.6"/>
 <path d="M30.5478 24.8048C31.8919 24.8048 32.8694 23.7051 32.8694 22.4832C32.8694 21.1391 31.7697 20.1615 30.5478 20.1615C29.2037 20.1615 28.2261 21.2613 28.2261 22.4832C28.2261 23.7051 29.2037 24.8048 30.5478 24.8048Z" fill="url(#monoclawBaseGrad)" filter="url(#monoclawDepth)" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="0.6"/>

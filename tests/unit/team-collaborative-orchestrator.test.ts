@@ -242,7 +242,8 @@ describe('team orchestrator collaborative dispatch', () => {
 
     const finishedRoot = await waitForTerminalTask(orchestrator, rootTask.id, 8000);
     expect(finishedRoot.status).toBe('completed');
-    expect(finishedRoot.result).toContain('Collaborative goal completed successfully');
+    expect(String(finishedRoot.result || '').trim().length).toBeGreaterThan(0);
+    expect(finishedRoot.result).not.toContain('Workspace:');
 
     const allTasks = orchestrator.getTasks(team.id, 200);
     const children = allTasks.filter((task) => task.collaboration?.parentTaskId === rootTask.id);

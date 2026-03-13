@@ -45,6 +45,11 @@ const COLLABORATIVE_TASK_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_COLLABORATION_PROTOCOL: CollaborationProtocol = 'native';
 const COLLABORATIVE_CONTEXT_SNIPPET_LIMIT = 400;
 const COLLABORATIVE_OUTPUT_WORD_LIMIT = 140;
+const TEAM_GATEWAY_SESSION_KEY_PREFIX = 'agent:main:team';
+const TEAM_GATEWAY_RPC_TIMEOUT_MS = 3 * 60 * 1000;
+const TEAM_GATEWAY_HISTORY_TIMEOUT_MS = 45 * 1000;
+const TEAM_GATEWAY_HISTORY_POLL_INTERVAL_MS = 800;
+const TEAM_GATEWAY_HISTORY_LIMIT = 80;
 
 function sanitizeId(raw: string): string {
   return raw
@@ -70,6 +75,34 @@ function normalizeStringList(input: unknown): string[] {
   return input
     .map((item) => String(item ?? '').trim())
     .filter(Boolean);
+}
+
+function detectTaskLanguage(input: string): 'en' | 'zh' | 'ja' {
+  const text = String(input || '');
+  if (/[\u3040-\u30ff]/.test(text)) return 'ja';
+  if (/[\u4e00-\u9fff]/.test(text)) return 'zh';
+  return 'en';
+}
+
+function describeTaskLanguage(language: 'en' | 'zh' | 'ja'): string {
+  if (language === 'zh') return 'Chinese (Simplified)';
+  if (language === 'ja') return 'Japanese';
+  return 'English';
+}
+
+function sanitizeCollaborativeOutput(output: string): string {
+  return output
+    .split('\n')
+    .filter((line) => !/^\s*(status|状态)\s*:/i.test(line))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function getFallbackCollaborativeOutput(language: 'en' | 'zh' | 'ja'): string {
+  if (language === 'zh') return '已完成协作，但未生成可展示的结果。请补充更多约束后重试。';
+  if (language === 'ja') return '協調処理は完了しましたが、表示可能な結果がありません。条件を追加して再実行してください。';
+  return 'Collaboration completed, but no user-facing result was generated. Add more constraints and try again.';
 }
 
 function buildDefaultSystemPrompt(roleName: string, personality: string, skills: string[]): string {
@@ -208,9 +241,34 @@ function normalizePersistedTeam(team: VirtualTeam): VirtualTeam {
   };
 }
 
+interface GatewayChatHistoryMessage {
+  id?: string;
+  role?: string;
+  content?: unknown;
+  timestamp?: string | number;
+}
+
+interface GatewayAssistantMarker {
+  id?: string;
+  index: number;
+  text: string;
+  timestampMs?: number;
+}
+
+export type TeamGatewayRpc = <T = unknown>(
+  method: string,
+  params?: unknown,
+  timeoutMs?: number,
+) => Promise<T>;
+
+interface TeamOrchestratorOptions {
+  gatewayRpc?: TeamGatewayRpc;
+}
+
 export class TeamOrchestrator extends EventEmitter {
   private readonly persistence = new TeamPersistenceStore();
   private readonly supervisor = new TeamProcessSupervisor();
+  private readonly gatewayRpc: TeamGatewayRpc | null;
 
   private readonly teams = new Map<string, VirtualTeam>();
   private readonly taskMap = new Map<string, TeamTask>();
@@ -218,12 +276,14 @@ export class TeamOrchestrator extends EventEmitter {
   private readonly teamTaskQueue = new Map<string, string[]>();
   private readonly teamLogs = new Map<string, TeamAuditLogEntry[]>();
   private readonly drainingQueue = new Set<string>();
+  private readonly gatewayRoleActiveTask = new Map<string, string>();
 
   private initialized = false;
   private initPromise: Promise<void> | null = null;
 
-  constructor() {
+  constructor(options: TeamOrchestratorOptions = {}) {
     super();
+    this.gatewayRpc = options.gatewayRpc ?? null;
 
     this.supervisor.on('runtime-status', (snapshot: RoleRuntimeSnapshot) => {
       this.emitRuntimeSnapshot(snapshot.teamId);
@@ -478,22 +538,357 @@ export class TeamOrchestrator extends EventEmitter {
     this.emit('runtime-changed', { ...snapshot, roles: snapshot.roles.map((role) => ({ ...role })) });
   }
 
-  private computeRuntimeSnapshot(teamId: string): TeamRuntimeSnapshot {
-    const team = this.getRequiredTeam(teamId);
-    const runtimeByRole = new Map(this.supervisor.getTeamSnapshots(teamId).map((snapshot) => [snapshot.roleId, snapshot]));
+  private isGatewaySessionModeEnabled(): boolean {
+    return Boolean(this.gatewayRpc);
+  }
 
-    const roleSnapshots = team.roles.map((role) => {
-      const runtime = runtimeByRole.get(role.id);
-      if (runtime) {
-        return runtime;
+  private buildGatewayRoleRuntimeKey(teamId: string, roleId: string): string {
+    return `${teamId}:${roleId}`;
+  }
+
+  private clearGatewayRoleBusyState(teamId: string): void {
+    const prefix = `${teamId}:`;
+    for (const key of [...this.gatewayRoleActiveTask.keys()]) {
+      if (!key.startsWith(prefix)) continue;
+      this.gatewayRoleActiveTask.delete(key);
+    }
+  }
+
+  private buildGatewayRoleSessionKey(teamId: string, roleId: string): string {
+    const teamSegment = sanitizeId(teamId) || 'team';
+    const roleSegment = sanitizeId(roleId) || 'role';
+    return `${TEAM_GATEWAY_SESSION_KEY_PREFIX}-${teamSegment}-${roleSegment}`;
+  }
+
+  private toTimestampMs(raw: unknown): number | undefined {
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      return raw < 1e12 ? Math.round(raw * 1000) : Math.round(raw);
+    }
+
+    if (typeof raw === 'string') {
+      const numeric = Number(raw);
+      if (Number.isFinite(numeric)) {
+        return numeric < 1e12 ? Math.round(numeric * 1000) : Math.round(numeric);
       }
+      const parsed = Date.parse(raw);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    return undefined;
+  }
+
+  private extractTextContent(content: unknown, depth = 0): string {
+    if (depth > 5 || content == null) return '';
+    if (typeof content === 'string') return content.trim();
+
+    if (Array.isArray(content)) {
+      return content
+        .map((item) => this.extractTextContent(item, depth + 1))
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+    }
+
+    if (typeof content !== 'object') {
+      return '';
+    }
+
+    const record = content as Record<string, unknown>;
+
+    const directTextCandidates = [
+      record.output_text,
+      record.text,
+      record.thinking,
+      record.content,
+      record.message,
+      record.delta,
+      record.arguments,
+      record.result,
+      record.error,
+      record.summary,
+    ];
+
+    const direct = directTextCandidates
+      .map((item) => this.extractTextContent(item, depth + 1))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+    if (direct) return direct;
+
+    if (Array.isArray(record.choices)) {
+      const fromChoices = record.choices
+        .map((item) => this.extractTextContent(item, depth + 1))
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+      if (fromChoices) return fromChoices;
+    }
+
+    return '';
+  }
+
+  private extractLatestAssistantMarker(history: GatewayChatHistoryMessage[]): GatewayAssistantMarker | null {
+    for (let index = history.length - 1; index >= 0; index -= 1) {
+      const message = history[index];
+      if (message.role !== 'assistant') continue;
+      const text = this.extractTextContent(message.content).trim();
+      if (!text) continue;
+
       return {
-        teamId,
+        id: typeof message.id === 'string' && message.id.trim() ? message.id : undefined,
+        index,
+        text,
+        timestampMs: this.toTimestampMs(message.timestamp),
+      };
+    }
+
+    return null;
+  }
+
+  private isAssistantMarkerNewer(
+    latest: GatewayAssistantMarker,
+    baseline: GatewayAssistantMarker | null,
+  ): boolean {
+    if (!baseline) return true;
+    if (latest.index > baseline.index) return true;
+    if (latest.id && baseline.id && latest.id !== baseline.id) return true;
+
+    if (
+      latest.timestampMs !== undefined &&
+      baseline.timestampMs !== undefined &&
+      latest.timestampMs > baseline.timestampMs
+    ) {
+      return true;
+    }
+
+    return latest.text !== baseline.text;
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      timer.unref();
+    });
+  }
+
+  private buildGatewayTaskInput(team: VirtualTeam, role: TeamRoleDefinition, input: string): string {
+    const responsibilities = role.responsibilities?.length
+      ? role.responsibilities.join('; ')
+      : '(none)';
+    const boundaries = role.boundaries?.length
+      ? role.boundaries.join('; ')
+      : '(none)';
+    const skills = role.skills?.length
+      ? role.skills.join(', ')
+      : '(none)';
+
+    return [
+      `Team: ${team.name} (${team.id})`,
+      `Role: ${role.name} (${role.id})`,
+      `Persona: ${role.personality}`,
+      `Responsibilities: ${responsibilities}`,
+      `Boundaries: ${boundaries}`,
+      `Skills: ${skills}`,
+      '',
+      'Role system prompt:',
+      role.agent?.systemPrompt || buildDefaultSystemPrompt(role.name, role.personality, role.skills ?? []),
+      '',
+      'Task:',
+      input,
+      '',
+      'Output contract:',
+      '- Keep answer concise and actionable.',
+      '- Prefer bullets and avoid markdown tables.',
+      '- Do not execute irreversible actions.',
+    ].join('\n');
+  }
+
+  private async getGatewayHistory(
+    rpc: TeamGatewayRpc,
+    sessionKey: string,
+  ): Promise<GatewayChatHistoryMessage[]> {
+    const raw = await rpc<unknown>(
+      'chat.history',
+      { sessionKey, limit: TEAM_GATEWAY_HISTORY_LIMIT },
+      TEAM_GATEWAY_RPC_TIMEOUT_MS,
+    );
+    if (Array.isArray(raw)) {
+      return raw as GatewayChatHistoryMessage[];
+    }
+
+    if (raw && typeof raw === 'object') {
+      const messages = (raw as { messages?: unknown }).messages;
+      if (Array.isArray(messages)) {
+        return messages as GatewayChatHistoryMessage[];
+      }
+    }
+
+    return [];
+  }
+
+  private async waitForGatewayAssistantText(
+    rpc: TeamGatewayRpc,
+    sessionKey: string,
+    baseline: GatewayAssistantMarker | null,
+    fallbackText: string,
+  ): Promise<string> {
+    const deadline = Date.now() + TEAM_GATEWAY_HISTORY_TIMEOUT_MS;
+    let latestError: unknown = null;
+
+    while (Date.now() <= deadline) {
+      try {
+        const history = await this.getGatewayHistory(rpc, sessionKey);
+        const latest = this.extractLatestAssistantMarker(history);
+        if (latest && this.isAssistantMarkerNewer(latest, baseline)) {
+          return latest.text;
+        }
+      } catch (error) {
+        latestError = error;
+      }
+
+      await this.sleep(TEAM_GATEWAY_HISTORY_POLL_INTERVAL_MS);
+    }
+
+    const fallback = fallbackText.trim();
+    if (fallback) {
+      return fallback;
+    }
+
+    if (latestError) {
+      throw new Error(`Gateway history polling failed: ${String(latestError)}`);
+    }
+
+    throw new Error('Timed out waiting for assistant output in Gateway session history');
+  }
+
+  private async runTaskViaGateway(team: VirtualTeam, role: TeamRoleDefinition, task: TeamTask): Promise<void> {
+    const rpc = this.gatewayRpc;
+    const runtimeKey = this.buildGatewayRoleRuntimeKey(team.id, role.id);
+    if (!rpc) {
+      throw new Error('Gateway RPC is unavailable for team dispatch');
+    }
+
+    try {
+      const sessionKey = this.buildGatewayRoleSessionKey(team.id, role.id);
+      const baseline = await this.getGatewayHistory(rpc, sessionKey)
+        .then((history) => this.extractLatestAssistantMarker(history))
+        .catch(() => null);
+      const message = this.buildGatewayTaskInput(team, role, task.input);
+
+      const sendResult = await rpc<unknown>(
+        'chat.send',
+        {
+          sessionKey,
+          message,
+          deliver: false,
+          idempotencyKey: `monoclaw-team:${task.id}:${randomUUID()}`,
+        },
+        TEAM_GATEWAY_RPC_TIMEOUT_MS,
+      );
+      const fallbackText = this.extractTextContent(sendResult);
+      const output = await this.waitForGatewayAssistantText(rpc, sessionKey, baseline, fallbackText);
+
+      task.status = 'completed';
+      task.completedAt = new Date().toISOString();
+      task.result = output;
+      task.error = undefined;
+      this.emit('task-changed', { ...task });
+      this.appendLog(team.id, {
+        level: 'info',
+        source: 'task',
+        message: `Task ${task.id} completed by role ${role.id} via OpenClaw session`,
+      });
+    } catch (error) {
+      task.status = 'failed';
+      task.completedAt = new Date().toISOString();
+      task.error = String(error);
+      this.emit('task-changed', { ...task });
+      this.appendLog(team.id, {
+        level: 'error',
+        source: 'task',
+        message: `Task ${task.id} failed in role ${role.id}: ${task.error}`,
+      });
+    } finally {
+      if (this.gatewayRoleActiveTask.get(runtimeKey) === task.id) {
+        this.gatewayRoleActiveTask.delete(runtimeKey);
+      }
+      void this.drainTeamQueue(team.id);
+      this.emitRuntimeSnapshot(team.id);
+    }
+  }
+
+  private buildGatewayRoleSnapshot(team: VirtualTeam, role: TeamRoleDefinition): RoleRuntimeSnapshot {
+    if (role.enabled === false) {
+      return {
+        teamId: team.id,
         roleId: role.id,
         roleName: role.name,
         status: 'stopped',
-      } as RoleRuntimeSnapshot;
-    });
+      };
+    }
+
+    const currentTaskId = this.gatewayRoleActiveTask.get(this.buildGatewayRoleRuntimeKey(team.id, role.id));
+    if (team.status === 'running') {
+      return {
+        teamId: team.id,
+        roleId: role.id,
+        roleName: role.name,
+        status: currentTaskId ? 'busy' : 'idle',
+        currentTaskId,
+      };
+    }
+
+    if (team.status === 'starting') {
+      return {
+        teamId: team.id,
+        roleId: role.id,
+        roleName: role.name,
+        status: 'starting',
+        currentTaskId,
+      };
+    }
+
+    if (team.status === 'error') {
+      return {
+        teamId: team.id,
+        roleId: role.id,
+        roleName: role.name,
+        status: 'error',
+        currentTaskId,
+        lastError: team.lastError,
+      };
+    }
+
+    return {
+      teamId: team.id,
+      roleId: role.id,
+      roleName: role.name,
+      status: 'stopped',
+      currentTaskId,
+    };
+  }
+
+  private computeRuntimeSnapshot(teamId: string): TeamRuntimeSnapshot {
+    const team = this.getRequiredTeam(teamId);
+    const roleSnapshots = this.isGatewaySessionModeEnabled()
+      ? team.roles.map((role) => this.buildGatewayRoleSnapshot(team, role))
+      : (() => {
+        const runtimeByRole = new Map(
+          this.supervisor.getTeamSnapshots(teamId).map((snapshot) => [snapshot.roleId, snapshot]),
+        );
+        return team.roles.map((role) => {
+          const runtime = runtimeByRole.get(role.id);
+          if (runtime) {
+            return runtime;
+          }
+          return {
+            teamId,
+            roleId: role.id,
+            roleName: role.name,
+            status: 'stopped',
+          } as RoleRuntimeSnapshot;
+        });
+      })();
 
     const runningTasks = (this.teamTaskOrder.get(teamId) ?? [])
       .map((taskId) => this.taskMap.get(taskId))
@@ -716,6 +1111,52 @@ export class TeamOrchestrator extends EventEmitter {
       throw new Error(team.lastError);
     }
 
+    if (this.isGatewaySessionModeEnabled()) {
+      if (team.status === 'running') {
+        return this.computeRuntimeSnapshot(teamId);
+      }
+
+      try {
+        team.status = 'starting';
+        team.lastError = undefined;
+        team.updatedAt = new Date().toISOString();
+        await this.persistence.ensureTeamFilesystem(team);
+        await this.persistence.saveTeam(team);
+        this.emitTeamChanged(team);
+        this.emitRuntimeSnapshot(team.id);
+
+        this.clearGatewayRoleBusyState(team.id);
+
+        team.status = 'running';
+        team.lastError = undefined;
+        team.updatedAt = new Date().toISOString();
+        await this.persistence.saveTeam(team);
+
+        this.appendLog(team.id, {
+          level: 'info',
+          source: 'orchestrator',
+          message: `Team started with ${enabledRoles.length} OpenClaw role session(s)`,
+        });
+
+        this.emitTeamChanged(team);
+        this.emitRuntimeSnapshot(team.id);
+        return this.computeRuntimeSnapshot(team.id);
+      } catch (error) {
+        team.status = 'error';
+        team.lastError = String(error);
+        team.updatedAt = new Date().toISOString();
+        await this.persistence.saveTeam(team);
+        this.appendLog(team.id, {
+          level: 'error',
+          source: 'orchestrator',
+          message: `Failed to start team: ${team.lastError}`,
+        });
+        this.emitTeamChanged(team);
+        this.emitRuntimeSnapshot(team.id);
+        throw error;
+      }
+    }
+
     if (team.status === 'running') {
       const runtimeByRole = new Map(
         this.supervisor.getTeamSnapshots(teamId).map((snapshot) => [snapshot.roleId, snapshot.status]),
@@ -814,7 +1255,11 @@ export class TeamOrchestrator extends EventEmitter {
     this.emitTeamChanged(team);
     this.emitRuntimeSnapshot(team.id);
 
-    await this.supervisor.stopTeam(team.id);
+    if (this.isGatewaySessionModeEnabled()) {
+      this.clearGatewayRoleBusyState(team.id);
+    } else {
+      await this.supervisor.stopTeam(team.id);
+    }
 
     team.status = 'stopped';
     team.lastError = undefined;
@@ -824,7 +1269,9 @@ export class TeamOrchestrator extends EventEmitter {
     this.appendLog(team.id, {
       level: 'info',
       source: 'orchestrator',
-      message: 'Team hibernated and all role runtimes stopped',
+      message: this.isGatewaySessionModeEnabled()
+        ? 'Team hibernated and Gateway role session dispatch paused'
+        : 'Team hibernated and all role runtimes stopped',
     });
 
     this.emitTeamChanged(team);
@@ -837,6 +1284,7 @@ export class TeamOrchestrator extends EventEmitter {
     const team = this.getRequiredTeam(teamId);
 
     await this.supervisor.stopTeam(team.id);
+    this.clearGatewayRoleBusyState(team.id);
     await this.persistence.removeTeam(team.id);
 
     this.teams.delete(team.id);
@@ -893,6 +1341,7 @@ export class TeamOrchestrator extends EventEmitter {
         ].join('\n'))
         .join('\n\n')
       : 'No previous role outputs yet.';
+    const taskLanguage = detectTaskLanguage(goalInput);
 
     return [
       `Goal-driven collaborative task (${frame.step}/${totalSteps}).`,
@@ -901,6 +1350,7 @@ export class TeamOrchestrator extends EventEmitter {
       `Target role: ${role.name} (${role.id})`,
       `Interaction: ${frame.fromRoleId} -> ${frame.toRoleId}`,
       `Expected output: ${frame.expectedOutput}`,
+      `Response language: ${describeTaskLanguage(taskLanguage)}`,
       '',
       'Goal:',
       goalInput,
@@ -917,6 +1367,7 @@ export class TeamOrchestrator extends EventEmitter {
       'Output requirements:',
       '- Be concise and actionable.',
       `- Keep the response under ${COLLABORATIVE_OUTPUT_WORD_LIMIT} words whenever possible.`,
+      '- Follow the response language setting above.',
       '- State assumptions and unresolved blockers clearly.',
       '- Return role-specific deliverables for handoff to next role.',
       '- Prefer bullets over long paragraphs.',
@@ -924,7 +1375,7 @@ export class TeamOrchestrator extends EventEmitter {
       '- Do not use markdown tables or fenced code blocks.',
       '- If you provide options, cap the list at 3 items.',
       '- Do not repeat the full shared context; return only the decision, evidence, and handoff delta.',
-      '- End with `Status: ready` or `Status: blocked`.',
+      '- If blocked, explicitly list the missing information before handoff.',
     ].join('\n');
   }
 
@@ -1106,7 +1557,9 @@ export class TeamOrchestrator extends EventEmitter {
         });
       }
 
-      const finalOutput = stepOutputs[stepOutputs.length - 1]?.output || 'No collaborative output generated.';
+      const rawFinalOutput = stepOutputs[stepOutputs.length - 1]?.output || '';
+      const finalOutput = sanitizeCollaborativeOutput(rawFinalOutput);
+      const fallbackResult = getFallbackCollaborativeOutput(detectTaskLanguage(rootTask.input));
       const resultDocument = [
         `# Collaborative Result ${goalId}`,
         '',
@@ -1122,21 +1575,14 @@ export class TeamOrchestrator extends EventEmitter {
           '',
         ].join('\n')),
         '## Final Synthesis',
-        finalOutput,
+        finalOutput || fallbackResult,
         '',
       ].join('\n');
       await writeFile(join(workspacePath || '', 'RESULT.md'), resultDocument, { encoding: 'utf-8', mode: 0o600 });
 
       rootTask.status = 'completed';
       rootTask.completedAt = new Date().toISOString();
-      rootTask.result = [
-        `Collaborative goal completed successfully: ${goalId}`,
-        `Protocol: ${plan.protocol}`,
-        `Workspace: ${workspacePath}`,
-        '',
-        'Final result:',
-        finalOutput,
-      ].join('\n');
+      rootTask.result = finalOutput || fallbackResult;
       rootTask.error = undefined;
       this.emit('task-changed', { ...rootTask });
       this.appendLog(team.id, {
@@ -1294,6 +1740,10 @@ export class TeamOrchestrator extends EventEmitter {
       if (!queue || queue.length === 0) {
         return;
       }
+      const initialTeam = this.teams.get(teamId);
+      if (!initialTeam || initialTeam.status !== 'running') {
+        return;
+      }
 
       while (true) {
         const queueIds = this.teamTaskQueue.get(teamId);
@@ -1301,11 +1751,27 @@ export class TeamOrchestrator extends EventEmitter {
           break;
         }
 
-        const runtimeState = new Map(
-          this.supervisor
-            .getTeamSnapshots(teamId)
-            .map((snapshot) => [snapshot.roleId, snapshot.status]),
-        );
+        const team = this.teams.get(teamId);
+        if (!team || team.status !== 'running') {
+          break;
+        }
+
+        const runtimeState = this.isGatewaySessionModeEnabled()
+          ? new Map(
+            team.roles
+              .filter((role) => role.enabled)
+              .map((role) => [
+                role.id,
+                this.gatewayRoleActiveTask.has(this.buildGatewayRoleRuntimeKey(teamId, role.id))
+                  ? 'busy'
+                  : 'idle',
+              ]),
+          )
+          : new Map(
+            this.supervisor
+              .getTeamSnapshots(teamId)
+              .map((snapshot) => [snapshot.roleId, snapshot.status]),
+          );
 
         let dispatchedAny = false;
 
@@ -1329,6 +1795,31 @@ export class TeamOrchestrator extends EventEmitter {
 
           queueIds.splice(index, 1);
           index -= 1;
+
+          if (this.isGatewaySessionModeEnabled()) {
+            const role = team.roles.find((item) => item.id === task.assignedRoleId && item.enabled);
+            if (!role) {
+              task.status = 'failed';
+              task.error = `Role is unavailable: ${task.assignedRoleId}`;
+              task.completedAt = new Date().toISOString();
+              this.emit('task-changed', { ...task });
+              this.appendLog(teamId, {
+                level: 'error',
+                source: 'task',
+                message: `Task ${task.id} dispatch failed: ${task.error}`,
+              });
+              continue;
+            }
+
+            const runtimeKey = this.buildGatewayRoleRuntimeKey(teamId, role.id);
+            this.gatewayRoleActiveTask.set(runtimeKey, task.id);
+            runtimeState.set(task.assignedRoleId, 'busy');
+            dispatchedAny = true;
+            void this.runTaskViaGateway(team, role, task).catch((error) => {
+              logger.error('Unhandled gateway team task execution error:', error);
+            });
+            continue;
+          }
 
           try {
             await this.supervisor.dispatchTask(teamId, task.assignedRoleId, task.id, task.input);
@@ -1361,6 +1852,7 @@ export class TeamOrchestrator extends EventEmitter {
     await this.supervisor.stopAll();
 
     for (const team of this.teams.values()) {
+      this.clearGatewayRoleBusyState(team.id);
       if (team.status === 'running' || team.status === 'starting' || team.status === 'hibernating') {
         team.status = 'stopped';
         team.updatedAt = new Date().toISOString();

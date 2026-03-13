@@ -112,8 +112,7 @@ describe('flight search & booking crew runtime flow', () => {
         const finishedRoot = await waitForTerminalTask(orchestrator, rootTask.id, 20000);
         expect(finishedRoot.status).toBe('completed');
         expect(finishedRoot.collaboration?.protocol).toBe(protocol);
-        expect(finishedRoot.result).toContain('Collaborative goal completed successfully');
-        expect(finishedRoot.result).toContain(`Protocol: ${protocol}`);
+        expect(String(finishedRoot.result || '').trim().length).toBeGreaterThan(0);
         expect(finishedRoot.result).toContain('Flight Booking Final Recommendation:');
 
         const allTasks = orchestrator.getTasks(team.id, 300);

@@ -145,14 +145,30 @@ pnpm run init
 pnpm dev
 ```
 
+`pnpm run init` now runs `uv:ensure`:
+
+- If a bundled `uv` already exists for your current platform, it is reused.
+- If `uv` exists in system `PATH` (for example installed by Homebrew or pipx), download is skipped.
+- If neither exists, bundled binaries are downloaded.
+
+For packaging/release builds, run `pnpm run uv:download` to force bundled binaries.
+If GitHub release download is blocked, configure mirrors with:
+
+```bash
+UV_DOWNLOAD_BASE_URL=https://<your-mirror>/<version> pnpm run uv:download
+# Optional fallback list, comma-separated:
+UV_DOWNLOAD_BASE_URLS=https://<mirror-a>/<version>,https://<mirror-b>/<version> pnpm run uv:download
+```
+
 ### First Launch
 
 When you launch Monoclaw for the first time, the **Setup Wizard** will guide you through:
 
 1. **Language & Region** – Configure your preferred locale
-2. **AI Provider** – Enter your API keys for supported providers
-3. **Skill Bundles** – Select pre-configured skills for common use cases
-4. **Verification** – Test your configuration before entering the main interface
+2. **Runtime Check** – Verify bundled OpenClaw and Gateway readiness
+3. **AI Provider** – Configure your preferred model provider
+4. **Optional Channel** – Connect messaging channels if needed
+5. **Enable Components** – Enable pre-bundled components only (no real-time package downloads)
 
 ### Proxy Settings
 

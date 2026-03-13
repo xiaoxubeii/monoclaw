@@ -15,16 +15,15 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/common/StatusBadge';
+import { controlPanelClass, controlSurfaceCardClass } from '@/pages/control/styles';
 import type { Status } from '@/components/common/StatusBadge';
 import type { Channel } from '@/types/channel';
 import type { Skill } from '@/types/skill';
 import type { UsageGroupBy, UsageHistoryEntry, UsageHistoryGroup, UsageWindow } from './types';
 import { formatTokenCount, formatUsageTimestamp, formatUptime } from './utils';
 
-const dashboardCardClass =
-  'border-border/70 bg-gradient-to-br from-background via-background to-sky-500/[0.05] shadow-[0_20px_60px_-36px_rgba(56,189,248,0.45)]';
-const dashboardPanelClass =
-  'rounded-xl border border-border/60 bg-background/60 backdrop-blur-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]';
+const dashboardCardClass = controlSurfaceCardClass;
+const dashboardPanelClass = controlPanelClass;
 
 interface DashboardStatusCardsProps {
   gatewayState: Status;

@@ -4,8 +4,19 @@ import 'zx/globals';
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const UV_VERSION = '0.10.0';
-const BASE_URL = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`;
+const DEFAULT_BASE_URL = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`;
 const OUTPUT_BASE = path.join(ROOT_DIR, 'resources', 'bin');
+
+const userDefinedPrimaryBase = process.env.UV_DOWNLOAD_BASE_URL?.trim();
+const userDefinedFallbackBases = (process.env.UV_DOWNLOAD_BASE_URLS ?? '')
+  .split(',')
+  .map(base => base.trim())
+  .filter(Boolean);
+const BASE_URLS = [...new Set([
+  ...(userDefinedPrimaryBase ? [userDefinedPrimaryBase] : []),
+  ...userDefinedFallbackBases,
+  DEFAULT_BASE_URL,
+])];
 
 // Mapping Node platforms/archs to uv release naming
 const TARGETS = {
@@ -52,7 +63,6 @@ async function setupTarget(id) {
   const targetDir = path.join(OUTPUT_BASE, id);
   const tempDir = path.join(ROOT_DIR, 'temp_uv_extract');
   const archivePath = path.join(ROOT_DIR, target.filename);
-  const downloadUrl = `${BASE_URL}/${target.filename}`;
 
   echo(chalk.blue`\n📦 Setting up uv for ${id}...`);
 
@@ -64,11 +74,32 @@ async function setupTarget(id) {
 
   try {
     // Download
-    echo`⬇️ Downloading: ${downloadUrl}`;
-    const response = await fetch(downloadUrl);
-    if (!response.ok) throw new Error(`Failed to download: ${response.statusText}`);
-    const buffer = await response.arrayBuffer();
-    await fs.writeFile(archivePath, Buffer.from(buffer));
+    let downloadSucceeded = false;
+    let lastError = null;
+    for (const baseUrl of BASE_URLS) {
+      const normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+      const downloadUrl = `${normalizedBaseUrl}/${target.filename}`;
+      echo`⬇️ Downloading: ${downloadUrl}`;
+      try {
+        const response = await fetch(downloadUrl);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
+        }
+        const buffer = await response.arrayBuffer();
+        await fs.writeFile(archivePath, Buffer.from(buffer));
+        downloadSucceeded = true;
+        break;
+      } catch (error) {
+        lastError = error;
+        echo(chalk.yellow`⚠️ Failed from ${downloadUrl}: ${error.message}`);
+      }
+    }
+
+    if (!downloadSucceeded) {
+      throw new Error(
+        `Failed to download ${target.filename} from configured sources. Last error: ${lastError?.message ?? 'unknown'}`
+      );
+    }
 
     // Extract
     echo`📂 Extracting...`;
@@ -140,18 +171,30 @@ if (downloadAll) {
     await setupTarget(id);
   }
 } else {
-  // Download for current system only (default for local dev)
-  const currentId = `${os.platform()}-${os.arch()}`;
-  echo(chalk.cyan`💻 Detected system: ${currentId}`);
-  
-  if (TARGETS[currentId]) {
-    await setupTarget(currentId);
-  } else {
-    echo(chalk.red`❌ Current system ${currentId} is not in the supported download list.`);
+  // Default behavior: download all supported arches for current OS platform.
+  const currentPlatform = os.platform();
+  const platformKey = currentPlatform === 'darwin'
+    ? 'mac'
+    : currentPlatform === 'win32'
+      ? 'win'
+      : currentPlatform === 'linux'
+        ? 'linux'
+        : null;
+
+  if (!platformKey) {
+    const currentId = `${currentPlatform}-${os.arch()}`;
+    echo(chalk.red`❌ Current platform ${currentId} is not in the supported download list.`);
     echo(`Supported targets: ${Object.keys(TARGETS).join(', ')}`);
     echo(`\nTip: Use --platform=<platform> to download for a specific platform`);
     echo(`     Use --all to download for all platforms`);
     process.exit(1);
+  }
+
+  const targets = PLATFORM_GROUPS[platformKey];
+  echo(chalk.cyan`💻 Detected platform: ${currentPlatform}`);
+  echo(`   Downloading uv binaries for: ${targets.join(', ')}`);
+  for (const id of targets) {
+    await setupTarget(id);
   }
 }
 

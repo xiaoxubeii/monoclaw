@@ -4,6 +4,14 @@ import { useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { SummaryTile } from '@/components/control/SummaryTile';
+import { cn } from '@/lib/utils';
+import {
+  controlHeroAuraClass,
+  controlHeroCardClass,
+  controlPanelClass,
+  controlSummaryTileClass,
+  controlSurfaceCardClass,
+} from '@/pages/control/styles';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useGatewayStore } from '@/stores/gateway';
 import {
@@ -186,8 +194,8 @@ export function RuntimeManager() {
 
   return (
     <div className="space-y-6">
-      <Card className="relative overflow-hidden border-border/70 bg-background/80 shadow-[0_24px_80px_-42px_rgba(99,102,241,0.5)]">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(99,102,241,0.18),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(129,140,248,0.14),transparent_28%)]" />
+      <Card className={controlHeroCardClass}>
+        <div className={controlHeroAuraClass} />
         <CardContent className="relative flex flex-col gap-5 p-6 xl:flex-row xl:items-end xl:justify-between">
           <div className="space-y-3">
             <div>
@@ -199,19 +207,19 @@ export function RuntimeManager() {
                 title={t('openclawManager.summaryRuntime')}
                 value="OpenClaw"
                 description={t('openclawManager.runtimeControlsTitle')}
-                className="bg-background/60 backdrop-blur-sm"
+                className={controlSummaryTileClass}
               />
               <SummaryTile
                 title={t('openclawManager.summaryGateway')}
                 value={gatewayStatus.state}
                 description={t('openclawManager.gatewayControl')}
-                className="bg-background/60 backdrop-blur-sm"
+                className={controlSummaryTileClass}
               />
               <SummaryTile
                 title={t('openclawManager.summaryVoice')}
                 value={voiceCallProvider}
                 description={t('openclawManager.voiceCallTitle')}
-                className="bg-background/60 backdrop-blur-sm"
+                className={controlSummaryTileClass}
               />
             </div>
           </div>
@@ -229,7 +237,7 @@ export function RuntimeManager() {
           onCopyPath={(path) => { void handleCopyPath(path); }}
         />
 
-        <Card className="border-border/70 bg-gradient-to-br from-background via-background to-indigo-500/[0.05] shadow-[0_20px_60px_-36px_rgba(99,102,241,0.4)]">
+        <Card className={controlSurfaceCardClass}>
           <CardHeader>
             <CardTitle className="text-lg">{t('openclawManager.runtimeControlsTitle')}</CardTitle>
             <CardDescription>{t('openclawManager.runtimeControlsDescription')}</CardDescription>
@@ -248,15 +256,15 @@ export function RuntimeManager() {
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="flex h-[116px] flex-col justify-between rounded-lg border border-border/60 bg-background/50 p-3 text-left">
+              <div className={cn(controlPanelClass, 'flex h-[116px] flex-col justify-between p-3 text-left')}>
                 <p className="text-sm font-medium">{t('openclawManager.gatewayControl')}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{t('openclawManager.gatewayControlDesc')}</p>
               </div>
-              <div className="flex h-[116px] flex-col justify-between rounded-lg border border-border/60 bg-background/50 p-3 text-left">
+              <div className={cn(controlPanelClass, 'flex h-[116px] flex-col justify-between p-3 text-left')}>
                 <p className="text-sm font-medium">{t('openclawManager.voiceCallTitle')}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{t('openclawManager.voiceCallDescription')}</p>
               </div>
-              <div className="flex h-[116px] flex-col justify-between rounded-lg border border-border/60 bg-background/50 p-3 text-left sm:col-span-2">
+              <div className={cn(controlPanelClass, 'flex h-[116px] flex-col justify-between p-3 text-left sm:col-span-2')}>
                 <p className="text-sm font-medium">{t('openclawManager.doctorTitle')}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{t('openclawManager.doctorDescription')}</p>
               </div>
@@ -273,7 +281,7 @@ export function RuntimeManager() {
         </TabsList>
 
         <TabsContent value="gateway" className="mt-0">
-          <Card>
+          <Card className={controlSurfaceCardClass}>
             <CardContent className="pt-6">
               <GatewayRuntimeControlsCard
                 gatewayState={gatewayStatus.state}
@@ -287,7 +295,7 @@ export function RuntimeManager() {
         </TabsContent>
 
         <TabsContent value="voice" className="mt-0">
-          <Card>
+          <Card className={controlSurfaceCardClass}>
             <CardContent className="pt-6">
               <VoiceCallSettingsCard
                 voiceCallLoading={voiceCallLoading}
@@ -312,7 +320,7 @@ export function RuntimeManager() {
         </TabsContent>
 
         <TabsContent value="doctor" className="mt-0">
-          <Card>
+          <Card className={controlSurfaceCardClass}>
             <CardContent className="pt-6">
               <DoctorCard
                 doctorRunning={doctorRunning}

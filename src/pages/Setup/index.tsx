@@ -114,19 +114,29 @@ function sanitizeSetupModelId(raw: string): string {
     .trim();
 }
 
-// Default skills to auto-install (no additional API keys required)
-interface DefaultSkill {
+// Offline components pre-bundled in the app package.
+interface DefaultComponent {
   id: string;
   name: string;
   description: string;
 }
 
-const defaultSkills: DefaultSkill[] = [
-  { id: 'opencode', name: 'OpenCode', description: 'AI coding assistant backend' },
-  { id: 'python-env', name: 'Python Environment', description: 'Python runtime for skills' },
-  { id: 'code-assist', name: 'Code Assist', description: 'Code analysis and suggestions' },
-  { id: 'file-tools', name: 'File Tools', description: 'File operations and management' },
-  { id: 'terminal', name: 'Terminal', description: 'Shell command execution' },
+const defaultComponents: DefaultComponent[] = [
+  {
+    id: 'openclaw-runtime',
+    name: 'OpenClaw Runtime',
+    description: 'Core runtime bundled inside the app package',
+  },
+  {
+    id: 'uv-runtime',
+    name: 'uv Runtime',
+    description: 'Bundled environment manager for consistent execution',
+  },
+  {
+    id: 'builtin-skills',
+    name: 'Built-in Skills',
+    description: 'Preloaded skill pack that can be enabled directly',
+  },
 ];
 
 import {
@@ -294,7 +304,7 @@ export function Setup() {
               {safeStepIndex === STEP.CHANNEL && <SetupChannelContent />}
               {safeStepIndex === STEP.INSTALLING && (
                 <InstallingContent
-                  skills={defaultSkills}
+                  skills={defaultComponents}
                   onComplete={handleInstallationComplete}
                   onSkip={() => setCurrentStep((i) => i + 1)}
                 />
@@ -1793,12 +1803,25 @@ interface SkillInstallState {
   name: string;
   description: string;
   status: InstallStatus;
+  detail?: string;
 }
 
 interface InstallingContentProps {
-  skills: DefaultSkill[];
+  skills: DefaultComponent[];
   onComplete: (installedSkills: string[]) => void;
   onSkip: () => void;
+}
+
+interface SetupPreparationComponentResult {
+  id: string;
+  ready: boolean;
+  message: string;
+}
+
+interface SetupPreparationResult {
+  success: boolean;
+  components?: SetupPreparationComponentResult[];
+  error?: string;
 }
 
 function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProps) {
@@ -1810,43 +1833,57 @@ function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProp
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const installStarted = useRef(false);
 
-  // Real installation process
+  // Offline preparation flow (no runtime downloads)
   useEffect(() => {
     if (installStarted.current) return;
     installStarted.current = true;
 
-    const runRealInstall = async () => {
+    const runOfflinePreparation = async () => {
       try {
-        // Step 1: Initialize all skills to 'installing' state for UI
+        // Step 1: Initialize all components to "installing" state for UI feedback.
         setSkillStates(prev => prev.map(s => ({ ...s, status: 'installing' })));
-        setOverallProgress(10);
+        setOverallProgress(20);
 
-        // Step 2: Call the backend to install uv and setup Python
-        const result = await window.electron.ipcRenderer.invoke('uv:install-all') as {
-          success: boolean;
-          error?: string
-        };
+        // Step 2: Prepare pre-bundled components only (offline-first, no downloads).
+        const result = await window.electron.ipcRenderer.invoke('setup:prepareOffline') as SetupPreparationResult;
 
-        if (result.success) {
-          setSkillStates(prev => prev.map(s => ({ ...s, status: 'completed' })));
-          setOverallProgress(100);
+        const componentResults = new Map(
+          (result.components ?? []).map((component) => [component.id, component])
+        );
+        const nextStates: SkillInstallState[] = skills.map((component) => {
+          const current = componentResults.get(component.id);
+          const ready = current?.ready ?? false;
+          return {
+            ...component,
+            status: ready ? ('completed' as InstallStatus) : ('failed' as InstallStatus),
+            detail: current?.message,
+          };
+        });
+        setSkillStates(nextStates);
+        setOverallProgress(100);
 
+        const hasFailed = nextStates.some((state) => state.status === 'failed');
+
+        if (result.success && !hasFailed) {
           await new Promise((resolve) => setTimeout(resolve, 800));
           onComplete(skills.map(s => s.id));
         } else {
-          setSkillStates(prev => prev.map(s => ({ ...s, status: 'failed' })));
-          setErrorMessage(result.error || 'Unknown error during installation');
-          toast.error('Environment setup failed');
+          const failedComponents = nextStates
+            .filter((state) => state.status === 'failed')
+            .map((state) => `${state.name}: ${state.detail || 'Not ready'}`);
+          const fallbackError = result.error || failedComponents.join('\n') || 'Offline preparation failed';
+          setErrorMessage(fallbackError);
+          toast.error(t('installing.error'));
         }
       } catch (err) {
         setSkillStates(prev => prev.map(s => ({ ...s, status: 'failed' })));
         setErrorMessage(String(err));
-        toast.error('Installation error');
+        toast.error(t('installing.error'));
       }
     };
 
-    runRealInstall();
-  }, [skills, onComplete]);
+    runOfflinePreparation();
+  }, [skills, onComplete, t]);
 
   const getStatusIcon = (status: InstallStatus) => {
     switch (status) {
@@ -1916,7 +1953,7 @@ function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProp
               {getStatusIcon(skill.status)}
               <div>
                 <p className="font-medium">{skill.name}</p>
-                <p className="text-xs text-muted-foreground">{skill.description}</p>
+                <p className="text-xs text-muted-foreground">{skill.detail || skill.description}</p>
               </div>
             </div>
             {getStatusText(skill)}
@@ -1977,7 +2014,7 @@ function CompleteContent({ selectedProvider, installedSkills }: CompleteContentP
   const gatewayStatus = useGatewayStore((state) => state.status);
 
   const providerData = providers.find((p) => p.id === selectedProvider);
-  const installedSkillNames = defaultSkills
+  const installedSkillNames = defaultComponents
     .filter((s) => installedSkills.includes(s.id))
     .map((s) => s.name)
     .join(', ');

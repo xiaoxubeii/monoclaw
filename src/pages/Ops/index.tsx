@@ -3,6 +3,11 @@ import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import { Card, CardContent } from '@/components/ui/card';
 import { SummaryTile } from '@/components/control/SummaryTile';
+import {
+  controlHeroAuraClass,
+  controlHeroCardClass,
+  controlSummaryTileClass,
+} from '@/pages/control/styles';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { OpsActionRecord, OpsEvent, OpsIpcResponse, OpsOverviewPayload, OpsStatusPayload } from '@/types/ops';
 import {
@@ -123,8 +128,8 @@ export function Ops() {
 
   return (
     <div className="space-y-6">
-      <Card className="relative overflow-hidden border-border/70 bg-background/80 shadow-[0_24px_80px_-42px_rgba(16,185,129,0.45)]">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.18),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(52,211,153,0.12),transparent_28%)]" />
+      <Card className={controlHeroCardClass}>
+        <div className={controlHeroAuraClass} />
         <CardContent className="relative flex flex-col gap-5 p-6 xl:flex-row xl:items-end xl:justify-between">
           <div className="space-y-3">
             <div>
@@ -136,19 +141,19 @@ export function Ops() {
                 title={t('ops.summary.health')}
                 value={opsStatus?.snapshot.score ?? 0}
                 description={t('ops.status.' + overallOpsStatus)}
-                className="bg-background/60 backdrop-blur-sm"
+                className={controlSummaryTileClass}
               />
               <SummaryTile
                 title={t('ops.summary.incidents')}
                 value={opsStatus?.snapshot.activeIncidents ?? 0}
                 description={autoRemediationEnabled ? t('ops.labels.autoRemediationActive') : t('ops.labels.autoRemediationPaused')}
-                className="bg-background/60 backdrop-blur-sm"
+                className={controlSummaryTileClass}
               />
               <SummaryTile
                 title={t('ops.summary.subsystems')}
                 value={subsystemsCount}
                 description={t('ops.labels.lastCheckAt', { time: formatOpsTime(opsStatus?.snapshot.lastCheckAt, fallbackTime) })}
-                className="bg-background/60 backdrop-blur-sm"
+                className={controlSummaryTileClass}
               />
             </div>
           </div>

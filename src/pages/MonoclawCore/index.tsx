@@ -4,6 +4,12 @@ import { useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { cn } from '@/lib/utils';
+import {
+  controlHeroAuraClass,
+  controlHeroCardClass,
+  controlPanelClass,
+} from '@/pages/control/styles';
 import {
   MonoclawCoreMemoryCard,
   MonoclawCoreStatusCard,
@@ -77,8 +83,8 @@ export function MonoclawCore() {
 
   return (
     <div className="space-y-6">
-      <Card className="relative overflow-hidden border-border/70 bg-background/80 shadow-[0_24px_80px_-42px_rgba(34,211,238,0.48)]">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.18),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(14,165,233,0.12),transparent_30%)]" />
+      <Card className={controlHeroCardClass}>
+        <div className={controlHeroAuraClass} />
         <CardContent className="relative space-y-5 p-6">
           <div className="space-y-3">
             <div>
@@ -86,25 +92,25 @@ export function MonoclawCore() {
               <p className="text-muted-foreground">{t('monoclawCore.description')}</p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="flex h-[116px] flex-col justify-between rounded-xl border border-border/60 bg-background/60 p-4 text-left backdrop-blur-sm">
+              <div className={cn(controlPanelClass, 'flex h-[116px] flex-col justify-between p-4 text-left')}>
                 <p className="text-sm font-medium text-foreground/88">{t('monoclawCore.statusTitle')}</p>
                 <Badge variant={healthy ? 'success' : 'destructive'}>
                   {healthy ? t('monoclawCore.healthy') : t('monoclawCore.attention')}
                 </Badge>
               </div>
-              <div className="flex h-[116px] flex-col justify-between rounded-xl border border-border/60 bg-background/60 p-4 text-left backdrop-blur-sm">
+              <div className={cn(controlPanelClass, 'flex h-[116px] flex-col justify-between p-4 text-left')}>
                 <p className="text-sm font-medium text-foreground/88">{t('monoclawCore.permissionsTitle')}</p>
                 <Badge variant={assistantDataStatus?.health.writable ? 'success' : 'destructive'}>
                   {assistantDataStatus?.health.writable ? t('monoclawCore.writable') : t('monoclawCore.readonly')}
                 </Badge>
               </div>
-              <div className="flex h-[116px] flex-col justify-between rounded-xl border border-border/60 bg-background/60 p-4 text-left backdrop-blur-sm">
+              <div className={cn(controlPanelClass, 'flex h-[116px] flex-col justify-between p-4 text-left')}>
                 <p className="text-sm font-medium text-foreground/88">{t('monoclawCore.missingTitle')}</p>
                 <Badge variant={missingDirCount === 0 ? 'success' : 'destructive'}>
                   {t('monoclawCore.missing', { count: missingDirCount })}
                 </Badge>
               </div>
-              <div className="flex h-[116px] flex-col justify-between rounded-xl border border-border/60 bg-background/60 p-4 text-left backdrop-blur-sm">
+              <div className={cn(controlPanelClass, 'flex h-[116px] flex-col justify-between p-4 text-left')}>
                 <p className="text-sm font-medium text-foreground/88">{t('monoclawCore.layoutTitle')}</p>
                 <Badge variant={assistantDataStatus?.drift.driftDetected ? 'destructive' : 'success'}>
                   {assistantDataStatus?.drift.driftDetected ? t('monoclawCore.driftDetected') : t('monoclawCore.driftClean')}

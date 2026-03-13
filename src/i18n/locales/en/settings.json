@@ -344,7 +344,7 @@
   },
   "localModel": {
     "title": "Local Models",
-    "description": "One-click enable Ollama and CPU-friendly presets for local deployment.",
+    "description": "One-click enable Ollama and CPU-friendly presets, with runtime and models downloaded on demand.",
     "labels": {
       "model": "Model",
       "ram": "RAM: min {{min}} GB, recommended {{recommend}} GB"

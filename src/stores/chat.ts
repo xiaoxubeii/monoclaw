@@ -89,6 +89,12 @@ interface ChatState {
   sessionLabels: Record<string, string>;
   /** Last message timestamp (ms) per session key, used for sorting */
   sessionLastActivity: Record<string, number>;
+  /** Last assistant output timestamp (ms) per session key, used for unread status */
+  sessionLastAssistantAt: Record<string, number>;
+  /** Last seen timestamp (ms) per session key */
+  sessionLastSeenAt: Record<string, number>;
+  /** Session runtime state for status dot */
+  sessionRuntimeState: Record<string, 'running' | 'idle' | 'error'>;
 
   // Thinking
   showThinking: boolean;
@@ -106,6 +112,8 @@ interface ChatState {
   handleChatEvent: (event: Record<string, unknown>) => void;
   toggleThinking: () => void;
   refresh: () => Promise<void>;
+  markSessionSeen: (key: string) => void;
+  markCurrentSessionSeen: () => void;
   clearError: () => void;
 }
 
@@ -190,6 +198,7 @@ const DEFAULT_SESSION_KEY = `${DEFAULT_CANONICAL_PREFIX}:main`;
 // available after the RPC returns, but history may load before that).
 const IMAGE_CACHE_KEY = 'monoclaw:image-cache';
 const IMAGE_CACHE_MAX = 100; // max entries to prevent unbounded growth
+const CHAT_SHOW_THINKING_KEY = 'monoclaw:chat:show-thinking';
 
 function loadImageCache(): Map<string, AttachedFileMeta> {
   try {
@@ -214,6 +223,24 @@ function saveImageCache(cache: Map<string, AttachedFileMeta>): void {
 }
 
 const _imageCache = loadImageCache();
+
+function loadShowThinkingPreference(): boolean {
+  try {
+    const raw = localStorage.getItem(CHAT_SHOW_THINKING_KEY);
+    if (raw == null) return false;
+    return raw === '1' || raw.toLowerCase() === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function saveShowThinkingPreference(showThinking: boolean): void {
+  try {
+    localStorage.setItem(CHAT_SHOW_THINKING_KEY, showThinking ? '1' : '0');
+  } catch {
+    // Ignore storage errors (private mode / quota / unavailable storage)
+  }
+}
 
 /** Extract plain text from message content (string or content blocks) */
 function getMessageText(content: unknown): string {
@@ -686,6 +713,19 @@ function getCanonicalPrefixFromSessions(sessions: ChatSession[]): string | null 
   return `${parts[0]}:${parts[1]}`;
 }
 
+function getSessionSuffix(sessionKey: string): string | null {
+  const trimmed = sessionKey.trim();
+  if (!trimmed) return null;
+  if (!trimmed.startsWith('agent:')) return trimmed;
+  const parts = trimmed.split(':');
+  if (parts.length < 3) return null;
+  return parts.slice(2).join(':') || null;
+}
+
+function truncateSessionLabel(text: string): string {
+  return text.length > 50 ? `${text.slice(0, 50)}…` : text;
+}
+
 function isToolOnlyMessage(message: RawMessage | undefined): boolean {
   if (!message) return false;
   if (isToolResultRole(message.role)) return true;
@@ -1054,8 +1094,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentSessionKey: DEFAULT_SESSION_KEY,
   sessionLabels: {},
   sessionLastActivity: {},
+  sessionLastAssistantAt: {},
+  sessionLastSeenAt: {},
+  sessionRuntimeState: {},
 
-  showThinking: true,
+  showThinking: loadShowThinkingPreference(),
   thinkingLevel: null,
 
   // ── Load sessions via sessions.list ──
@@ -1122,15 +1165,52 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ]
           : dedupedSessions;
 
-        set({ sessions: sessionsWithCurrent, currentSessionKey: nextSessionKey });
+        set((s) => {
+          const sessionKeys = new Set(sessionsWithCurrent.map((session) => session.key));
+          const filterBySessionKeys = <T,>(record: Record<string, T>): Record<string, T> => (
+            Object.fromEntries(Object.entries(record).filter(([key]) => sessionKeys.has(key)))
+          );
+          const sessionSuffixes = new Set(
+            [...sessionKeys]
+              .map((key) => getSessionSuffix(key))
+              .filter((suffix): suffix is string => !!suffix),
+          );
+          const filterSessionLabels = (record: Record<string, string>): Record<string, string> => (
+            Object.fromEntries(
+              Object.entries(record).filter(([key]) => {
+                if (sessionKeys.has(key)) return true;
+                const suffix = getSessionSuffix(key);
+                return !!suffix && sessionSuffixes.has(suffix);
+              }),
+            )
+          );
+          const nowMs = Date.now();
+          const nextSessionLastSeenAt = filterBySessionKeys(s.sessionLastSeenAt);
+          if (!nextSessionLastSeenAt[nextSessionKey]) {
+            nextSessionLastSeenAt[nextSessionKey] = nowMs;
+          }
+          const nextSessionRuntimeState = filterBySessionKeys(s.sessionRuntimeState);
+          for (const key of sessionKeys) {
+            if (!nextSessionRuntimeState[key]) nextSessionRuntimeState[key] = 'idle';
+          }
+          return {
+            sessions: sessionsWithCurrent,
+            currentSessionKey: nextSessionKey,
+            sessionLabels: filterSessionLabels(s.sessionLabels),
+            sessionLastActivity: filterBySessionKeys(s.sessionLastActivity),
+            sessionLastAssistantAt: filterBySessionKeys(s.sessionLastAssistantAt),
+            sessionLastSeenAt: nextSessionLastSeenAt,
+            sessionRuntimeState: nextSessionRuntimeState,
+          };
+        });
 
         if (currentSessionKey !== nextSessionKey) {
           get().loadHistory();
         }
 
-        // Background: fetch first user message for every non-main session to populate labels upfront.
+        // Background: fetch first user message for every session to populate labels upfront.
         // Uses a small limit so it's cheap; runs in parallel and doesn't block anything.
-        const sessionsToLabel = sessionsWithCurrent.filter((s) => !s.key.endsWith(':main'));
+        const sessionsToLabel = sessionsWithCurrent;
         if (sessionsToLabel.length > 0) {
           void Promise.all(
             sessionsToLabel.map(async (session) => {
@@ -1144,17 +1224,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 const msgs = Array.isArray(r.result.messages) ? r.result.messages as RawMessage[] : [];
                 const firstUser = msgs.find((m) => m.role === 'user');
                 const lastMsg = msgs[msgs.length - 1];
+                const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant' && !!m.timestamp);
                 set((s) => {
                   const next: Partial<typeof s> = {};
                   if (firstUser) {
                     const labelText = getMessageText(firstUser.content).trim();
                     if (labelText) {
-                      const truncated = labelText.length > 50 ? `${labelText.slice(0, 50)}…` : labelText;
+                      const truncated = truncateSessionLabel(labelText);
                       next.sessionLabels = { ...s.sessionLabels, [session.key]: truncated };
                     }
                   }
                   if (lastMsg?.timestamp) {
                     next.sessionLastActivity = { ...s.sessionLastActivity, [session.key]: toMs(lastMsg.timestamp) };
+                  }
+                  if (lastAssistant?.timestamp) {
+                    next.sessionLastAssistantAt = { ...s.sessionLastAssistantAt, [session.key]: toMs(lastAssistant.timestamp) };
                   }
                   return next;
                 });
@@ -1173,6 +1257,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   switchSession: (key: string) => {
     const { currentSessionKey, messages } = get();
     const leavingEmpty = !currentSessionKey.endsWith(':main') && messages.length === 0;
+    const nowMs = Date.now();
     set((s) => ({
       currentSessionKey: key,
       messages: [],
@@ -1184,6 +1269,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
       pendingFinal: false,
       lastUserMessageAt: null,
       pendingToolImages: [],
+      sessionLastSeenAt: {
+        ...(
+          leavingEmpty
+            ? Object.fromEntries(Object.entries(s.sessionLastSeenAt).filter(([k]) => k !== currentSessionKey))
+            : s.sessionLastSeenAt
+        ),
+        [key]: nowMs,
+      },
+      sessionRuntimeState: {
+        ...(
+          leavingEmpty
+            ? Object.fromEntries(Object.entries(s.sessionRuntimeState).filter(([k]) => k !== currentSessionKey))
+            : s.sessionRuntimeState
+        ),
+        [key]: s.sessionRuntimeState[key] ?? 'idle',
+      },
       ...(leavingEmpty ? {
         sessions: s.sessions.filter((s) => s.key !== currentSessionKey),
         sessionLabels: Object.fromEntries(
@@ -1191,6 +1292,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ),
         sessionLastActivity: Object.fromEntries(
           Object.entries(s.sessionLastActivity).filter(([k]) => k !== currentSessionKey),
+        ),
+        sessionLastAssistantAt: Object.fromEntries(
+          Object.entries(s.sessionLastAssistantAt).filter(([k]) => k !== currentSessionKey),
         ),
       } : {}),
     }));
@@ -1228,10 +1332,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (currentSessionKey === key) {
       // Switched away from deleted session — pick the first remaining or create new
       const next = remaining[0];
+      const nowMs = Date.now();
       set((s) => ({
         sessions: remaining,
         sessionLabels: Object.fromEntries(Object.entries(s.sessionLabels).filter(([k]) => k !== key)),
         sessionLastActivity: Object.fromEntries(Object.entries(s.sessionLastActivity).filter(([k]) => k !== key)),
+        sessionLastAssistantAt: Object.fromEntries(Object.entries(s.sessionLastAssistantAt).filter(([k]) => k !== key)),
+        sessionLastSeenAt: {
+          ...Object.fromEntries(Object.entries(s.sessionLastSeenAt).filter(([k]) => k !== key)),
+          ...(next?.key ? { [next.key]: nowMs } : {}),
+        },
+        sessionRuntimeState: {
+          ...Object.fromEntries(Object.entries(s.sessionRuntimeState).filter(([k]) => k !== key)),
+          ...(next?.key ? { [next.key]: s.sessionRuntimeState[next.key] ?? 'idle' } : {}),
+        },
         messages: [],
         streamingText: '',
         streamingMessage: null,
@@ -1251,6 +1365,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessions: remaining,
         sessionLabels: Object.fromEntries(Object.entries(s.sessionLabels).filter(([k]) => k !== key)),
         sessionLastActivity: Object.fromEntries(Object.entries(s.sessionLastActivity).filter(([k]) => k !== key)),
+        sessionLastAssistantAt: Object.fromEntries(Object.entries(s.sessionLastAssistantAt).filter(([k]) => k !== key)),
+        sessionLastSeenAt: Object.fromEntries(Object.entries(s.sessionLastSeenAt).filter(([k]) => k !== key)),
+        sessionRuntimeState: Object.fromEntries(Object.entries(s.sessionRuntimeState).filter(([k]) => k !== key)),
       }));
     }
   },
@@ -1267,6 +1384,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const prefix = getCanonicalPrefixFromSessions(get().sessions) ?? DEFAULT_CANONICAL_PREFIX;
     const newKey = `${prefix}:session-${Date.now()}`;
     const newSessionEntry: ChatSession = { key: newKey, displayName: newKey };
+    const nowMs = Date.now();
     set((s) => ({
       currentSessionKey: newKey,
       sessions: [
@@ -1279,6 +1397,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sessionLastActivity: leavingEmpty
         ? Object.fromEntries(Object.entries(s.sessionLastActivity).filter(([k]) => k !== currentSessionKey))
         : s.sessionLastActivity,
+      sessionLastAssistantAt: leavingEmpty
+        ? Object.fromEntries(Object.entries(s.sessionLastAssistantAt).filter(([k]) => k !== currentSessionKey))
+        : s.sessionLastAssistantAt,
+      sessionLastSeenAt: {
+        ...(
+          leavingEmpty
+            ? Object.fromEntries(Object.entries(s.sessionLastSeenAt).filter(([k]) => k !== currentSessionKey))
+            : s.sessionLastSeenAt
+        ),
+        [newKey]: nowMs,
+      },
+      sessionRuntimeState: {
+        ...(
+          leavingEmpty
+            ? Object.fromEntries(Object.entries(s.sessionRuntimeState).filter(([k]) => k !== currentSessionKey))
+            : s.sessionRuntimeState
+        ),
+        [newKey]: 'idle',
+      },
       messages: [],
       streamingText: '',
       streamingMessage: null,
@@ -1308,6 +1445,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ),
       sessionLastActivity: Object.fromEntries(
         Object.entries(s.sessionLastActivity).filter(([k]) => k !== currentSessionKey),
+      ),
+      sessionLastAssistantAt: Object.fromEntries(
+        Object.entries(s.sessionLastAssistantAt).filter(([k]) => k !== currentSessionKey),
+      ),
+      sessionLastSeenAt: Object.fromEntries(
+        Object.entries(s.sessionLastSeenAt).filter(([k]) => k !== currentSessionKey),
+      ),
+      sessionRuntimeState: Object.fromEntries(
+        Object.entries(s.sessionRuntimeState).filter(([k]) => k !== currentSessionKey),
       ),
     }));
   },
@@ -1357,20 +1503,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
         }
 
-        // Extract first user message text as a session label for display in the toolbar.
-        // Skip main sessions (key ends with ":main") — they rely on the Gateway-provided
-        // displayName (e.g. the configured agent name "Monoclaw") instead.
-        const isMainSession = currentSessionKey.endsWith(':main');
-        if (!isMainSession) {
-          const firstUserMsg = finalMessages.find((m) => m.role === 'user');
-          if (firstUserMsg) {
-            const labelText = getMessageText(firstUserMsg.content).trim();
-            if (labelText) {
-              const truncated = labelText.length > 50 ? `${labelText.slice(0, 50)}…` : labelText;
-              set((s) => ({
-                sessionLabels: { ...s.sessionLabels, [currentSessionKey]: truncated },
-              }));
-            }
+        // Extract first user message text as a session label for display.
+        const firstUserMsg = finalMessages.find((m) => m.role === 'user');
+        if (firstUserMsg) {
+          const labelText = getMessageText(firstUserMsg.content).trim();
+          if (labelText) {
+            const truncated = truncateSessionLabel(labelText);
+            set((s) => ({
+              sessionLabels: { ...s.sessionLabels, [currentSessionKey]: truncated },
+            }));
           }
         }
 
@@ -1380,6 +1521,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const lastAt = toMs(lastMsg.timestamp);
           set((s) => ({
             sessionLastActivity: { ...s.sessionLastActivity, [currentSessionKey]: lastAt },
+          }));
+        }
+        const lastAssistantMsg = [...finalMessages].reverse().find((msg) => msg.role === 'assistant' && !!msg.timestamp);
+        if (lastAssistantMsg?.timestamp) {
+          const lastAssistantAt = toMs(lastAssistantMsg.timestamp);
+          set((s) => ({
+            sessionLastAssistantAt: { ...s.sessionLastAssistantAt, [currentSessionKey]: lastAssistantAt },
           }));
         }
 
@@ -1430,7 +1578,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (pendingFinal || get().pendingFinal) {
           if (recentAssistant) {
             clearHistoryPoll();
-            set({ sending: false, activeRunId: null, pendingFinal: false });
+            set((s) => ({
+              sending: false,
+              activeRunId: null,
+              pendingFinal: false,
+              sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'idle' },
+            }));
           } else {
             const fallbackMessage = buildPendingFinalFallback(rawMessages, userMsTs, { requireStale: true });
             if (fallbackMessage && !visibleMessages.some((msg) => msg.id === fallbackMessage.id)) {
@@ -1438,7 +1591,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
             if (fallbackMessage) {
               clearHistoryPoll();
-              set({
+              set((s) => ({
                 sending: false,
                 activeRunId: null,
                 pendingFinal: false,
@@ -1446,7 +1599,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 streamingText: '',
                 streamingTools: [],
                 pendingToolImages: [],
-              });
+                sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'idle' },
+              }));
             }
           }
         }
@@ -1503,13 +1657,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingTools: [],
       pendingFinal: false,
       lastUserMessageAt: nowMs,
+      sessionLastSeenAt: { ...s.sessionLastSeenAt, [currentSessionKey]: nowMs },
+      sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'running' },
     }));
 
     // Update session label with first user message text as soon as it's sent
     const { sessionLabels, messages } = get();
     const isFirstMessage = !messages.slice(0, -1).some((m) => m.role === 'user');
-    if (!currentSessionKey.endsWith(':main') && isFirstMessage && !sessionLabels[currentSessionKey] && trimmed) {
-      const truncated = trimmed.length > 50 ? `${trimmed.slice(0, 50)}…` : trimmed;
+    if (isFirstMessage && !sessionLabels[currentSessionKey] && trimmed) {
+      const truncated = truncateSessionLabel(trimmed);
       set((s) => ({ sessionLabels: { ...s.sessionLabels, [currentSessionKey]: truncated } }));
     }
 
@@ -1557,6 +1713,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sending: false,
         activeRunId: null,
         lastUserMessageAt: null,
+        sessionRuntimeState: { ...state.sessionRuntimeState, [currentSessionKey]: 'error' },
       });
     };
     setTimeout(checkStuck, 30_000);
@@ -1617,13 +1774,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       if (!result.success) {
         clearHistoryPoll();
-        set({ error: result.error || 'Failed to send message', sending: false });
-      } else if (result.result?.runId) {
-        set({ activeRunId: result.result.runId });
+        set((s) => ({
+          error: result.error || 'Failed to send message',
+          sending: false,
+          sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'error' },
+        }));
+      } else {
+        const runId = result.result?.runId;
+        if (!runId) return;
+        set((s) => ({
+          activeRunId: runId,
+          sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'running' },
+        }));
       }
     } catch (err) {
       clearHistoryPoll();
-      set({ error: String(err), sending: false });
+      set((s) => ({
+        error: String(err),
+        sending: false,
+        sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'error' },
+      }));
     }
   },
 
@@ -1633,7 +1803,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     clearHistoryPoll();
     clearErrorRecoveryTimer();
     const { currentSessionKey } = get();
-    set({ sending: false, streamingText: '', streamingMessage: null, pendingFinal: false, lastUserMessageAt: null, pendingToolImages: [] });
+    set((s) => ({
+      sending: false,
+      streamingText: '',
+      streamingMessage: null,
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'idle' },
+    }));
     set({ streamingTools: [] });
 
     try {
@@ -1704,6 +1882,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           lastUserMessageAt: null,
           pendingToolImages: [],
           error: null,
+          sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'idle' },
         }));
 
         void window.electron.ipcRenderer.invoke(
@@ -1728,7 +1907,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // show loading/streaming in the app when this session has an active run.
       const { sending } = get();
       if (!sending && runId) {
-        set({ sending: true, activeRunId: runId, error: null });
+        set((s) => ({
+          sending: true,
+          activeRunId: runId,
+          error: null,
+          sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'running' },
+        }));
       }
     }
 
@@ -1737,7 +1921,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // Run just started (e.g. from console); show loading immediately.
         const { sending: currentSending } = get();
         if (!currentSending && runId) {
-          set({ sending: true, activeRunId: runId, error: null });
+          set((s) => ({
+            sending: true,
+            activeRunId: runId,
+            error: null,
+            sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'running' },
+          }));
         }
         break;
       }
@@ -1747,7 +1936,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // stale error banner so the user sees the live stream again.
         if (_errorRecoveryTimer) {
           clearErrorRecoveryTimer();
-          set({ error: null });
+          set((s) => ({ error: null, sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'running' } }));
         }
         const updates = collectToolUpdates(event.message, resolvedState);
         set((s) => ({
@@ -1759,12 +1948,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
             return event.message ?? s.streamingMessage;
           })(),
           streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
+          sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'running' },
         }));
         break;
       }
       case 'final': {
         clearErrorRecoveryTimer();
-        if (get().error) set({ error: null });
+        if (get().error) {
+          set((s) => ({ error: null, sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'running' } }));
+        }
         // Message complete - add to history and clear streaming
         const finalMsg = event.message as RawMessage | undefined;
         if (finalMsg) {
@@ -1829,6 +2021,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   ? [...s.pendingToolImages, ...toolFiles]
                   : s.pendingToolImages,
                 streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
+                sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'running' },
               };
             });
             armPendingFinalHistoryPoll(get);
@@ -1861,6 +2054,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 streamingMessage: null,
                 pendingFinal: true,
                 streamingTools,
+                sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'running' },
                 ...clearPendingImages,
               } : {
                 streamingText: '',
@@ -1869,6 +2063,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 activeRunId: hasOutput ? null : s.activeRunId,
                 pendingFinal: hasOutput ? false : true,
                 streamingTools,
+                sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: hasOutput ? 'idle' : 'running' },
                 ...clearPendingImages,
               };
             }
@@ -1878,6 +2073,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               streamingMessage: null,
               pendingFinal: true,
               streamingTools,
+              sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'running' },
               ...clearPendingImages,
             } : {
               messages: [...s.messages, msgWithImages],
@@ -1887,6 +2083,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               activeRunId: hasOutput ? null : s.activeRunId,
               pendingFinal: hasOutput ? false : true,
               streamingTools,
+              sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: hasOutput ? 'idle' : 'running' },
               ...clearPendingImages,
             };
           });
@@ -1898,7 +2095,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
         } else {
           // No message in final event - reload history to get complete data
-          set({ streamingText: '', streamingMessage: null, pendingFinal: true });
+          set((s) => ({
+            streamingText: '',
+            streamingMessage: null,
+            pendingFinal: true,
+            sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'running' },
+          }));
           get().loadHistory();
         }
         break;
@@ -1929,6 +2131,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           streamingTools: [],
           pendingFinal: false,
           pendingToolImages: [],
+          sessionRuntimeState: { ...get().sessionRuntimeState, [currentSessionKey]: 'error' },
         });
 
         // Don't immediately give up: the Gateway often retries internally
@@ -1948,6 +2151,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 sending: false,
                 activeRunId: null,
                 lastUserMessageAt: null,
+                sessionRuntimeState: { ...state.sessionRuntimeState, [currentSessionKey]: 'error' },
               });
               // One final history reload in case the Gateway completed in the
               // background and we just missed the event.
@@ -1956,14 +2160,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }, ERROR_RECOVERY_GRACE_MS);
         } else {
           clearHistoryPoll();
-          set({ sending: false, activeRunId: null, lastUserMessageAt: null });
+          set((s) => ({
+            sending: false,
+            activeRunId: null,
+            lastUserMessageAt: null,
+            sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'error' },
+          }));
         }
         break;
       }
       case 'aborted': {
         clearHistoryPoll();
         clearErrorRecoveryTimer();
-        set({
+        set((s) => ({
           sending: false,
           activeRunId: null,
           streamingText: '',
@@ -1972,7 +2181,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           pendingFinal: false,
           lastUserMessageAt: null,
           pendingToolImages: [],
-        });
+          sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'idle' },
+        }));
         break;
       }
       default: {
@@ -1986,6 +2196,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           set((s) => ({
             streamingMessage: event.message ?? s.streamingMessage,
             streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
+            sessionRuntimeState: { ...s.sessionRuntimeState, [currentSessionKey]: 'running' },
           }));
         }
         break;
@@ -1995,7 +2206,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   // ── Toggle thinking visibility ──
 
-  toggleThinking: () => set((s) => ({ showThinking: !s.showThinking })),
+  toggleThinking: () => set((s) => {
+    const next = !s.showThinking;
+    saveShowThinkingPreference(next);
+    return { showThinking: next };
+  }),
 
   // ── Refresh: reload history + sessions ──
 
@@ -2004,5 +2219,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await Promise.all([loadHistory(), loadSessions()]);
   },
 
-  clearError: () => set({ error: null }),
+  markSessionSeen: (key: string) => {
+    if (!key) return;
+    const nowMs = Date.now();
+    set((s) => ({ sessionLastSeenAt: { ...s.sessionLastSeenAt, [key]: nowMs } }));
+  },
+
+  markCurrentSessionSeen: () => {
+    const key = get().currentSessionKey;
+    if (!key) return;
+    const nowMs = Date.now();
+    set((s) => ({ sessionLastSeenAt: { ...s.sessionLastSeenAt, [key]: nowMs } }));
+  },
+
+  clearError: () => set((s) => ({
+    error: null,
+    sessionRuntimeState: { ...s.sessionRuntimeState, [s.currentSessionKey]: 'idle' },
+  })),
 }));

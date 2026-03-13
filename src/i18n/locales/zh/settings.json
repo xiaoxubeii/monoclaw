@@ -344,7 +344,7 @@
   },
   "localModel": {
     "title": "本地模型",
-    "description": "一键启用 Ollama 与 CPU 友好预设，快速完成本地部署。",
+    "description": "一键启用 Ollama 与 CPU 友好预设，运行时和模型会在启用时按需下载。",
     "labels": {
       "model": "模型",
       "ram": "内存：最低 {{min}} GB，推荐 {{recommend}} GB"

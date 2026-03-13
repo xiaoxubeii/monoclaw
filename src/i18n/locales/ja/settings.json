@@ -343,7 +343,7 @@
   },
   "localModel": {
     "title": "ローカルモデル",
-    "description": "Ollama と CPU 向けプリセットをワンクリックで有効化します。",
+    "description": "Ollama と CPU 向けプリセットをワンクリックで有効化します。ランタイムとモデルは必要時にダウンロードされます。",
     "labels": {
       "model": "モデル",
       "ram": "メモリ: 最低 {{min}} GB / 推奨 {{recommend}} GB"

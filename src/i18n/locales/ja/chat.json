@@ -12,7 +12,7 @@
     "noLogs": "（ログはまだありません）",
     "toolbar": {
         "refresh": "チャットを更新",
-        "showThinking": "思考を表示",
-        "hideThinking": "思考を非表示"
+        "showThinking": "中間ステップを表示（デバッグ）",
+        "hideThinking": "中間ステップを非表示（デバッグ）"
     }
 }
