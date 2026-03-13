@@ -170,6 +170,7 @@ const electronAPI = {
         'team:hibernate',
         'team:dissolve',
         'team:dispatchTask',
+        'team:interveneTask',
         'team:getTasks',
         'team:getLogs',
         'team:getRuntime',

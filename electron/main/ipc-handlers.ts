@@ -64,6 +64,7 @@ import { proxyAwareFetch } from '../utils/proxy-fetch';
 import { getRecentTokenUsageHistory } from '../utils/token-usage';
 import { TeamOrchestrator } from '../team/orchestrator';
 import type {
+  CollaborativeInterventionPayload,
   CreateTeamPayload,
   DispatchTaskPayload,
   UpdateFeishuPayload,
@@ -3315,6 +3316,17 @@ function registerTeamHandlers(teamOrchestrator: TeamOrchestrator, mainWindow: Br
       await teamOrchestrator.ensureInitialized();
       const id = expectNonEmptyString(teamId, 'teamId');
       const task = await teamOrchestrator.dispatchTask(id, payload as DispatchTaskPayload);
+      return teamOk(task);
+    } catch (error) {
+      return teamFail(error);
+    }
+  });
+
+  ipcMain.handle('team:interveneTask', async (_, teamId: unknown, payload: unknown) => {
+    try {
+      await teamOrchestrator.ensureInitialized();
+      const id = expectNonEmptyString(teamId, 'teamId');
+      const task = await teamOrchestrator.interveneTask(id, payload as CollaborativeInterventionPayload);
       return teamOk(task);
     } catch (error) {
       return teamFail(error);

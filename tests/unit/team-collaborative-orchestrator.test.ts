@@ -99,6 +99,12 @@ vi.mock('@electron/team/process-supervisor', () => {
       runtime.status = 'busy';
       this.emit('runtime-status', { ...runtime });
 
+      const shouldBlockForIntervention = (
+        roleId === 'inventory-scout'
+        && input.includes('INTERVENTION_REQUIRED')
+        && !input.includes('User intervention')
+      );
+
       setTimeout(() => {
         runtime.status = 'idle';
         this.emit('runtime-status', { ...runtime });
@@ -106,7 +112,13 @@ vi.mock('@electron/team/process-supervisor', () => {
           teamId,
           roleId,
           taskId,
-          output: `[${roleId}] processed: ${input.slice(0, 80)}`,
+          output: shouldBlockForIntervention
+            ? [
+              `[${roleId}] processed: ${input.slice(0, 80)}`,
+              'Status: blocked',
+              'Missing information: traveler date is required',
+            ].join('\n')
+            : `[${roleId}] processed: ${input.slice(0, 80)}\nStatus: ready`,
         });
       }, 10);
     }
@@ -200,6 +212,38 @@ async function waitForTerminalTask(orchestrator: TeamOrchestrator, taskId: strin
     const timeout = setTimeout(() => {
       orchestrator.off('task-changed', onChanged);
       reject(new Error(`timeout waiting for task ${taskId}`));
+    }, timeoutMs);
+
+    orchestrator.on('task-changed', onChanged);
+  });
+}
+
+async function waitForTaskIntervention(
+  orchestrator: TeamOrchestrator,
+  taskId: string,
+  timeoutMs = 4000,
+): Promise<TeamTask> {
+  const existing = orchestrator
+    .getRuntimeOverview()
+    .flatMap((runtime) => orchestrator.getTasks(runtime.teamId, 200))
+    .find((task) => task.id === taskId);
+
+  if (existing?.collaboration?.awaitingIntervention) {
+    return existing;
+  }
+
+  return new Promise<TeamTask>((resolve, reject) => {
+    const onChanged = (task: TeamTask) => {
+      if (task.id !== taskId) return;
+      if (!task.collaboration?.awaitingIntervention) return;
+      clearTimeout(timeout);
+      orchestrator.off('task-changed', onChanged);
+      resolve(task);
+    };
+
+    const timeout = setTimeout(() => {
+      orchestrator.off('task-changed', onChanged);
+      reject(new Error(`timeout waiting for intervention on task ${taskId}`));
     }, timeoutMs);
 
     orchestrator.on('task-changed', onChanged);
@@ -327,5 +371,38 @@ describe('team orchestrator collaborative dispatch', () => {
     });
     const finishedOverrideTask = await waitForTerminalTask(orchestrator, overrideTask.id, 8000);
     expect(finishedOverrideTask.collaboration?.protocol).toBe('crewai');
+  });
+
+  it('accepts user intervention and resumes blocked native-v2 collaborative goal', async () => {
+    const orchestrator = new TeamOrchestrator();
+    const team = await orchestrator.createTeam({
+      name: 'Flight Team - Intervention',
+      domain: 'travel',
+      description: 'Native-v2 intervention test',
+      roles: buildRoles(),
+    });
+
+    await orchestrator.startTeam(team.id);
+
+    const rootTask = await orchestrator.dispatchTask(team.id, {
+      input: 'INTERVENTION_REQUIRED: Prepare travel recommendation and wait for missing traveler date.',
+      collaborative: true,
+      requestedRoleId: 'trip-coordinator',
+    });
+
+    const blockedTask = await waitForTaskIntervention(orchestrator, rootTask.id, 8000);
+    expect(blockedTask.status).toBe('running');
+    expect(blockedTask.collaboration?.interventionRequired).toBe(true);
+    expect(blockedTask.collaboration?.awaitingIntervention).toBe(true);
+
+    await orchestrator.interveneTask(team.id, {
+      rootTaskId: rootTask.id,
+      note: 'Traveler date is 2026-03-20.',
+    });
+
+    const finishedRoot = await waitForTerminalTask(orchestrator, rootTask.id, 8000);
+    expect(finishedRoot.status).toBe('completed');
+    expect(finishedRoot.collaboration?.interventionCount).toBe(1);
+    expect(finishedRoot.result).toContain('Collaborative goal completed successfully');
   });
 });

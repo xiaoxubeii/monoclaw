@@ -93,6 +93,12 @@ export interface TeamTaskCollaboration {
   expectedOutput?: string;
   workspacePath?: string;
   roleSequence?: string[];
+  interventionRequired?: boolean;
+  awaitingIntervention?: boolean;
+  interventionMessage?: string;
+  blockedNodeId?: string;
+  lastInterventionAt?: string;
+  interventionCount?: number;
 }
 
 export interface TeamAuditLogEntry {
@@ -160,4 +166,9 @@ export interface DispatchTaskPayload {
   requestedRoleId?: string;
   collaborative?: boolean;
   collaborationProtocol?: CollaborationProtocol;
+}
+
+export interface CollaborativeInterventionPayload {
+  rootTaskId: string;
+  note: string;
 }

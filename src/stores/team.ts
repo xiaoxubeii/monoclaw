@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import i18n from '@/i18n';
 import type {
+  CollaborativeInterventionPayload,
   CreateTeamPayload,
   DispatchTaskPayload,
   TeamAuditLogEntry,
@@ -81,6 +82,7 @@ interface TeamState {
   dissolveTeam: (teamId: string) => Promise<void>;
 
   dispatchTask: (teamId: string, payload: DispatchTaskPayload) => Promise<TeamTask>;
+  interveneTask: (teamId: string, payload: CollaborativeInterventionPayload) => Promise<TeamTask>;
 
   clearError: () => void;
 }
@@ -339,6 +341,19 @@ export const useTeamStore = create<TeamState>((set, get) => ({
 
   dispatchTask: async (teamId, payload) => {
     const task = await invokeTeam<TeamTask>('team:dispatchTask', teamId, payload);
+    set((state) => ({
+      tasksByTeam: {
+        ...state.tasksByTeam,
+        [teamId]: upsertTask(state.tasksByTeam[teamId] ?? [], task),
+      },
+      error: null,
+    }));
+    await get().refreshTeamData(teamId);
+    return task;
+  },
+
+  interveneTask: async (teamId, payload) => {
+    const task = await invokeTeam<TeamTask>('team:interveneTask', teamId, payload);
     set((state) => ({
       tasksByTeam: {
         ...state.tasksByTeam,

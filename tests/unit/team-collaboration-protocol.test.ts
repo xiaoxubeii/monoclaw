@@ -70,6 +70,15 @@ describe('team collaboration protocol planner', () => {
       'handoff',
       'complete',
     ]);
+
+    const clarifyNode = plan.flow.nodes.find((item) => item.intent === 'clarify');
+    const handoffNodes = plan.flow.nodes.filter((item) => item.intent === 'handoff');
+    const completeNode = plan.flow.nodes.find((item) => item.intent === 'complete');
+
+    expect(clarifyNode).toBeTruthy();
+    expect(handoffNodes.length).toBe(2);
+    expect(handoffNodes.every((item) => item.dependsOn.includes(clarifyNode!.id))).toBe(true);
+    expect(completeNode?.dependsOn.slice().sort()).toEqual(handoffNodes.map((item) => item.id).sort());
   });
 
   it('builds non-native adapters with explicit review interactions', () => {
@@ -83,6 +92,17 @@ describe('team collaboration protocol planner', () => {
     expect(plan.interactions).toHaveLength(6);
     expect(plan.interactions.filter((item) => item.intent === 'review')).toHaveLength(2);
     expect(plan.interactions.every((item) => item.meta?.graphNode)).toBe(true);
+
+    const reviewNodes = plan.flow.nodes.filter((item) => item.intent === 'review');
+    expect(reviewNodes).toHaveLength(2);
+    for (const node of reviewNodes) {
+      expect(node.dependsOn).toHaveLength(1);
+      const parent = plan.flow.nodes.find((item) => item.id === node.dependsOn[0]);
+      expect(parent?.intent).toBe('handoff');
+    }
+
+    const completeNode = plan.flow.nodes.find((item) => item.intent === 'complete');
+    expect(completeNode?.dependsOn.slice().sort()).toEqual(reviewNodes.map((item) => item.id).sort());
   });
 
   it('falls back to the team default protocol when the task does not override it', () => {

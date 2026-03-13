@@ -7,6 +7,22 @@ import { TeamPersistenceStore } from './store';
 import { TeamProcessSupervisor, type RoleRuntimeAgentBinding } from './process-supervisor';
 import { routeRole } from './routing';
 import { buildRoleCollaborationPlan } from './collaboration-protocol';
+import {
+  applyNativeV2Intervention,
+  appendNativeV2Event,
+  createNativeV2ExecutionState,
+  getNativeV2FinalOutput,
+  listNativeV2CompletedNodeStates,
+  loadNativeV2ExecutionState,
+  markNativeV2NodeBlocked,
+  markNativeV2NodeCompleted,
+  markNativeV2NodeFailed,
+  markNativeV2NodeRunning,
+  type NativeV2ExecutionState,
+  persistNativeV2ExecutionState,
+  pickNativeV2DispatchBatch,
+  recoverNativeV2ExecutionState,
+} from './native-v2';
 import { logger } from '../utils/logger';
 import {
   getApiKey,
@@ -15,6 +31,7 @@ import {
 } from '../utils/secure-storage';
 import { getProviderConfig as getBackendProviderConfig } from '../utils/provider-registry';
 import type {
+  CollaborativeInterventionPayload,
   CollaborationProtocol,
   CreateTeamPayload,
   DispatchTaskPayload,
@@ -30,7 +47,11 @@ import type {
   UpdateTeamPayload,
   VirtualTeam,
 } from './types';
-import type { RoleCollaborationInteraction, RoleCollaborationPlan } from './collaboration-protocol';
+import type {
+  RoleCollaborationFlowNode,
+  RoleCollaborationInteraction,
+  RoleCollaborationPlan,
+} from './collaboration-protocol';
 
 const FEISHU_SECRET_MASK = '********';
 const DEFAULT_AGENT_PROVIDER = 'openclaw';
@@ -45,6 +66,11 @@ const COLLABORATIVE_TASK_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_COLLABORATION_PROTOCOL: CollaborationProtocol = 'native';
 const COLLABORATIVE_CONTEXT_SNIPPET_LIMIT = 400;
 const COLLABORATIVE_OUTPUT_WORD_LIMIT = 140;
+
+interface CollaborativeBlockedSignal {
+  blocked: boolean;
+  reason?: string;
+}
 
 function sanitizeId(raw: string): string {
   return raw
@@ -63,6 +89,13 @@ function assertTeamId(teamId: string): void {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+  });
 }
 
 function normalizeStringList(input: unknown): string[] {
@@ -176,6 +209,31 @@ function uniqueByRoleId(roles: TeamRoleDefinition[]): TeamRoleDefinition[] {
   return result;
 }
 
+function parseCollaborativeBlockedSignal(output: string): CollaborativeBlockedSignal {
+  const normalized = output.toLowerCase();
+  if (!/status\s*:\s*blocked/i.test(normalized)) {
+    return { blocked: false };
+  }
+
+  const reasonMatch = output.match(/(?:missing information|blocker|blocked reason|reason)\s*[:：]\s*([^\n]+)/i);
+  if (reasonMatch?.[1]?.trim()) {
+    return { blocked: true, reason: reasonMatch[1].trim() };
+  }
+
+  const concise = output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(' ')
+    .slice(0, 220);
+
+  return {
+    blocked: true,
+    reason: concise || 'Waiting for additional user input',
+  };
+}
+
 function maskSecret(secret: string): string {
   if (!secret) return '';
   if (secret.length <= 4) return FEISHU_SECRET_MASK;
@@ -218,6 +276,7 @@ export class TeamOrchestrator extends EventEmitter {
   private readonly teamTaskQueue = new Map<string, string[]>();
   private readonly teamLogs = new Map<string, TeamAuditLogEntry[]>();
   private readonly drainingQueue = new Set<string>();
+  private readonly nativeV2RunningGoals = new Set<string>();
 
   private initialized = false;
   private initPromise: Promise<void> | null = null;
@@ -967,6 +1026,595 @@ export class TeamOrchestrator extends EventEmitter {
     rootTask: TeamTask,
     plan: RoleCollaborationPlan,
   ): Promise<void> {
+    if (plan.protocol === 'native') {
+      await this.runCollaborativeGoalNativeV2(team, rootTask, plan);
+      return;
+    }
+
+    await this.runCollaborativeGoalLegacy(team, rootTask, plan);
+  }
+
+  private getRoleNameById(team: VirtualTeam, roleId: string): string {
+    return team.roles.find((role) => role.id === roleId)?.name || roleId;
+  }
+
+  private async runCollaborativeGoalNativeV2(
+    team: VirtualTeam,
+    rootTask: TeamTask,
+    plan: RoleCollaborationPlan,
+    resumeState?: NativeV2ExecutionState,
+  ): Promise<void> {
+    const collaboration = rootTask.collaboration;
+    if (!collaboration) {
+      throw new Error('Missing collaboration metadata on root goal task');
+    }
+
+    const { goalId, workspacePath } = collaboration;
+    if (!workspacePath) {
+      throw new Error('Missing collaborative workspace path for native-v2 execution');
+    }
+    if (this.nativeV2RunningGoals.has(goalId)) {
+      return;
+    }
+    this.nativeV2RunningGoals.add(goalId);
+
+    const totalSteps = plan.flow.nodes.length;
+    const stepDir = join(workspacePath, 'steps');
+
+    try {
+      await mkdir(stepDir, { recursive: true, mode: 0o700 });
+
+      if (!resumeState) {
+        const goalDocument = [
+          `# Goal ${goalId}`,
+          '',
+          `- Team: ${team.name} (${team.id})`,
+          `- Requested at: ${rootTask.requestedAt}`,
+          `- Protocol: ${plan.protocol}`,
+          '- Engine: native-v2',
+          `- Total steps: ${totalSteps}`,
+          `- Role sequence: ${plan.roleSequence.join(' -> ')}`,
+          '',
+          '## Goal Input',
+          rootTask.input,
+          '',
+        ].join('\n');
+        await writeFile(join(workspacePath, 'GOAL.md'), goalDocument, { encoding: 'utf-8', mode: 0o600 });
+      }
+
+      const loadedState = resumeState || await loadNativeV2ExecutionState(workspacePath);
+      let executionState = loadedState
+        ? recoverNativeV2ExecutionState(loadedState, plan.flow)
+        : createNativeV2ExecutionState({
+          goalId,
+          rootTaskId: rootTask.id,
+          teamId: team.id,
+          protocol: plan.protocol,
+          flow: plan.flow,
+        });
+
+      await persistNativeV2ExecutionState(workspacePath, executionState);
+      if (!resumeState) {
+        await appendNativeV2Event(workspacePath, {
+          ts: new Date().toISOString(),
+          type: loadedState ? 'native-v2-resumed' : 'native-v2-started',
+          details: {
+            totalSteps,
+            protocol: plan.protocol,
+          },
+        });
+      }
+
+      if (rootTask.collaboration) {
+        rootTask.collaboration = {
+          ...rootTask.collaboration,
+          interventionRequired: false,
+          awaitingIntervention: false,
+          interventionMessage: undefined,
+          blockedNodeId: undefined,
+          interventionCount: rootTask.collaboration.interventionCount ?? 0,
+        };
+        this.emit('task-changed', { ...rootTask });
+      }
+
+      while (executionState.status === 'running') {
+        const dispatchBatch = pickNativeV2DispatchBatch(executionState, 6);
+        if (dispatchBatch.length === 0) {
+          const allCompleted = plan.flow.nodes.every((node) => executionState.nodes[node.id]?.status === 'completed');
+          if (allCompleted) {
+            executionState.status = 'completed';
+            executionState.updatedAt = new Date().toISOString();
+            if (workspacePath) {
+              await persistNativeV2ExecutionState(workspacePath, executionState);
+              await appendNativeV2Event(workspacePath, {
+                ts: new Date().toISOString(),
+                type: 'native-v2-completed',
+              });
+            }
+            break;
+          }
+
+          throw new Error('Native-v2 scheduler reached a deadlock: no ready nodes while execution is still running');
+        }
+
+        const runningBatch: Array<{
+          node: RoleCollaborationFlowNode;
+          role: TeamRoleDefinition;
+          stepInput: string;
+          childTaskId: string;
+          waiter: Promise<TeamTask>;
+        }> = [];
+
+        for (const node of dispatchBatch) {
+          const role = this.getRoleById(team, node.executorRoleId);
+          const completedContext = [
+            ...listNativeV2CompletedNodeStates(executionState).map((item) => ({
+              roleName: this.getRoleNameById(team, item.node.executorRoleId),
+              output: item.output || '(empty output)',
+            })),
+            ...executionState.interventions.slice(-2).map((item) => ({
+              roleName: 'User intervention',
+              output: item.note,
+            })),
+          ];
+
+          const stepInput = this.buildCollaborativeStepInput(
+            plan.protocol,
+            node,
+            rootTask.input,
+            role,
+            totalSteps,
+            workspacePath || '',
+            completedContext,
+          );
+
+          this.appendLog(team.id, {
+            level: 'info',
+            source: 'task',
+            message: `Collaborative step ${node.step}/${totalSteps} started: ${node.intent} by ${role.name}`,
+            meta: {
+              goalId,
+              rootTaskId: rootTask.id,
+              step: node.step,
+              roleId: role.id,
+              protocol: plan.protocol,
+              intent: node.intent,
+              fromRoleId: node.fromRoleId,
+              toRoleId: node.toRoleId,
+            },
+          });
+
+          const childTask = await this.dispatchTask(team.id, {
+            input: stepInput,
+            requestedRoleId: role.id,
+          });
+
+          const childTaskRef = this.taskMap.get(childTask.id);
+          if (!childTaskRef) {
+            throw new Error(`Collaborative step task is missing after dispatch: ${childTask.id}`);
+          }
+
+          childTaskRef.collaboration = {
+            enabled: true,
+            goalId,
+            protocol: plan.protocol,
+            isRoot: false,
+            parentTaskId: rootTask.id,
+            step: node.step,
+            totalSteps,
+            intent: node.intent,
+            interactionId: node.id,
+            fromRoleId: node.fromRoleId,
+            toRoleId: node.toRoleId,
+            expectedOutput: node.expectedOutput,
+            workspacePath,
+            roleSequence: plan.roleSequence,
+          };
+          this.emit('task-changed', { ...childTaskRef });
+
+          executionState = markNativeV2NodeRunning(executionState, node.id, childTask.id);
+          if (workspacePath) {
+            await persistNativeV2ExecutionState(workspacePath, executionState);
+            await appendNativeV2Event(workspacePath, {
+              ts: new Date().toISOString(),
+              type: 'node-running',
+              nodeId: node.id,
+              taskId: childTask.id,
+              details: {
+                step: node.step,
+                roleId: node.executorRoleId,
+                intent: node.intent,
+              },
+            });
+          }
+
+          runningBatch.push({
+            node,
+            role,
+            stepInput,
+            childTaskId: childTask.id,
+            waiter: this.waitForTaskTerminalState(childTask.id),
+          });
+        }
+
+        const settled = await Promise.all(
+          runningBatch.map(async (item) => ({
+            ...item,
+            finishedTask: await item.waiter,
+          })),
+        );
+
+        let batchError: string | null = null;
+        let blockedSignal: { node: RoleCollaborationFlowNode; reason: string; childTaskId: string } | null = null;
+        for (const item of settled) {
+          if (item.finishedTask.status !== 'completed') {
+            const errorText = item.finishedTask.error || `Collaborative step failed: ${item.childTaskId}`;
+            executionState = markNativeV2NodeFailed(executionState, item.node.id, errorText);
+            batchError = batchError || errorText;
+            if (workspacePath) {
+              await persistNativeV2ExecutionState(workspacePath, executionState);
+              await appendNativeV2Event(workspacePath, {
+                ts: new Date().toISOString(),
+                type: 'node-failed',
+                nodeId: item.node.id,
+                taskId: item.childTaskId,
+                details: {
+                  step: item.node.step,
+                  error: errorText,
+                },
+              });
+            }
+            continue;
+          }
+
+          const stepOutput = item.finishedTask.result?.trim() || '(empty output)';
+          const blocked = parseCollaborativeBlockedSignal(stepOutput);
+          if (blocked.blocked) {
+            const reason = blocked.reason || 'Waiting for additional user input';
+            executionState = markNativeV2NodeBlocked(executionState, item.node.id, reason, stepOutput);
+            blockedSignal = blockedSignal || {
+              node: item.node,
+              reason,
+              childTaskId: item.childTaskId,
+            };
+            await persistNativeV2ExecutionState(workspacePath, executionState);
+            await appendNativeV2Event(workspacePath, {
+              ts: new Date().toISOString(),
+              type: 'node-blocked',
+              nodeId: item.node.id,
+              taskId: item.childTaskId,
+              details: {
+                step: item.node.step,
+                reason,
+              },
+            });
+          } else {
+            executionState = markNativeV2NodeCompleted(executionState, item.node.id, stepOutput);
+            await persistNativeV2ExecutionState(workspacePath, executionState);
+            await appendNativeV2Event(workspacePath, {
+              ts: new Date().toISOString(),
+              type: 'node-completed',
+              nodeId: item.node.id,
+              taskId: item.childTaskId,
+              details: {
+                step: item.node.step,
+              },
+            });
+          }
+
+          const stepFileName = [
+            String(item.node.step).padStart(2, '0'),
+            toSafeFileSegment(item.node.intent),
+            toSafeFileSegment(item.role.id),
+          ].join('-') + '.md';
+          const stepDocument = [
+            `# Step ${item.node.step}/${totalSteps}`,
+            '',
+            `- Protocol: ${plan.protocol}`,
+            '- Engine: native-v2',
+            `- Intent: ${item.node.intent}`,
+            `- Interaction: ${item.node.fromRoleId} -> ${item.node.toRoleId}`,
+            `- Role: ${item.role.name} (${item.role.id})`,
+            `- Task ID: ${item.finishedTask.id}`,
+            `- Completed at: ${item.finishedTask.completedAt || new Date().toISOString()}`,
+            '',
+            '## Input',
+            item.stepInput,
+            '',
+            '## Output',
+            stepOutput,
+            '',
+          ].join('\n');
+          await writeFile(join(stepDir, stepFileName), stepDocument, { encoding: 'utf-8', mode: 0o600 });
+
+          this.appendLog(team.id, {
+            level: 'info',
+            source: 'task',
+            message: `Collaborative step ${item.node.step}/${totalSteps} completed: ${item.node.intent} by ${item.role.name}`,
+            meta: {
+              goalId,
+              rootTaskId: rootTask.id,
+              childTaskId: item.finishedTask.id,
+              step: item.node.step,
+              roleId: item.role.id,
+              protocol: plan.protocol,
+              intent: item.node.intent,
+            },
+          });
+        }
+
+        if (batchError) {
+          throw new Error(batchError);
+        }
+
+        if (blockedSignal) {
+          rootTask.collaboration = {
+            ...rootTask.collaboration,
+            interventionRequired: true,
+            awaitingIntervention: true,
+            interventionMessage: blockedSignal.reason,
+            blockedNodeId: blockedSignal.node.id,
+            interventionCount: rootTask.collaboration?.interventionCount ?? 0,
+          };
+          rootTask.status = 'running';
+          rootTask.error = undefined;
+          rootTask.result = [
+            `Collaborative goal is waiting for user intervention: ${goalId}`,
+            `Blocked step: ${blockedSignal.node.step}`,
+            `Reason: ${blockedSignal.reason}`,
+          ].join('\n');
+          this.emit('task-changed', { ...rootTask });
+          this.appendLog(team.id, {
+            level: 'warn',
+            source: 'task',
+            message: `Collaborative goal ${goalId} is blocked and waiting for user intervention`,
+            meta: {
+              goalId,
+              rootTaskId: rootTask.id,
+              blockedNodeId: blockedSignal.node.id,
+              blockedTaskId: blockedSignal.childTaskId,
+              reason: blockedSignal.reason,
+              engine: 'native-v2',
+            },
+          });
+          await appendNativeV2Event(workspacePath, {
+            ts: new Date().toISOString(),
+            type: 'goal-blocked',
+            nodeId: blockedSignal.node.id,
+            taskId: blockedSignal.childTaskId,
+            details: {
+              reason: blockedSignal.reason,
+            },
+          });
+          return;
+        }
+      }
+
+      if (executionState.status === 'blocked') {
+        return;
+      }
+
+      if (executionState.status !== 'completed') {
+        throw new Error('Native-v2 execution did not reach completed state');
+      }
+
+      const completedNodes = listNativeV2CompletedNodeStates(executionState);
+      const finalOutput = getNativeV2FinalOutput(executionState) || 'No collaborative output generated.';
+      const resultDocument = [
+        `# Collaborative Result ${goalId}`,
+        '',
+        `- Team: ${team.name} (${team.id})`,
+        `- Protocol: ${plan.protocol}`,
+        '- Engine: native-v2',
+        `- Root task: ${rootTask.id}`,
+        `- Finished at: ${new Date().toISOString()}`,
+        '',
+        '## Step Outputs',
+        ...completedNodes.map((item) => [
+          `### Step ${item.node.step}: ${this.getRoleNameById(team, item.node.executorRoleId)} (${item.node.executorRoleId})`,
+          item.output || '(empty output)',
+          '',
+        ].join('\n')),
+        '## Final Synthesis',
+        finalOutput,
+        '',
+      ].join('\n');
+      await writeFile(join(workspacePath, 'RESULT.md'), resultDocument, { encoding: 'utf-8', mode: 0o600 });
+
+      rootTask.status = 'completed';
+      rootTask.completedAt = new Date().toISOString();
+      rootTask.result = [
+        `Collaborative goal completed successfully: ${goalId}`,
+        `Protocol: ${plan.protocol}`,
+        'Engine: native-v2',
+        `Workspace: ${workspacePath}`,
+        '',
+        'Final result:',
+        finalOutput,
+      ].join('\n');
+      rootTask.error = undefined;
+      this.emit('task-changed', { ...rootTask });
+      this.appendLog(team.id, {
+        level: 'info',
+        source: 'task',
+        message: `Collaborative goal ${goalId} completed`,
+        meta: {
+          goalId,
+          rootTaskId: rootTask.id,
+          totalSteps,
+          engine: 'native-v2',
+        },
+      });
+    } catch (error) {
+      const errorText = String(error);
+      rootTask.status = 'failed';
+      rootTask.completedAt = new Date().toISOString();
+      rootTask.error = errorText;
+      this.emit('task-changed', { ...rootTask });
+      this.appendLog(team.id, {
+        level: 'error',
+        source: 'task',
+        message: `Collaborative goal ${goalId} failed: ${errorText}`,
+        meta: {
+          goalId,
+          rootTaskId: rootTask.id,
+          engine: 'native-v2',
+        },
+      });
+
+      if (workspacePath) {
+        const errorDocument = [
+          `# Collaborative Goal Error ${goalId}`,
+          '',
+          `- Root task: ${rootTask.id}`,
+          `- Failed at: ${new Date().toISOString()}`,
+          '',
+          '## Error',
+          errorText,
+          '',
+        ].join('\n');
+        try {
+          await writeFile(join(workspacePath, 'ERROR.md'), errorDocument, { encoding: 'utf-8', mode: 0o600 });
+        } catch {
+          // Keep root task failure as source of truth even if workspace error report cannot be written.
+        }
+      }
+    } finally {
+      this.nativeV2RunningGoals.delete(goalId);
+      this.emitRuntimeSnapshot(team.id);
+    }
+  }
+
+  private buildNativeV2PlanFromState(
+    executionState: NativeV2ExecutionState,
+    rootTask: TeamTask,
+  ): RoleCollaborationPlan {
+    const interactions = executionState.flow.nodes
+      .slice()
+      .sort((left, right) => left.step - right.step)
+      .map((node) => {
+        const { dependsOn, ...interaction } = node;
+        return interaction;
+      });
+
+    const roleSequence = rootTask.collaboration?.roleSequence?.length
+      ? [...rootTask.collaboration.roleSequence]
+      : interactions.map((item) => item.executorRoleId);
+
+    return {
+      goalId: executionState.goalId,
+      protocol: executionState.protocol,
+      coordinatorRoleId: rootTask.assignedRoleId,
+      roleSequence,
+      interactions,
+      flow: executionState.flow,
+    };
+  }
+
+  async interveneTask(teamId: string, payload: CollaborativeInterventionPayload): Promise<TeamTask> {
+    await this.ensureInitialized();
+    const team = this.getRequiredTeam(teamId);
+
+    const rootTaskId = payload.rootTaskId?.trim();
+    if (!rootTaskId) {
+      throw new Error('rootTaskId is required');
+    }
+
+    const note = payload.note?.trim();
+    if (!note) {
+      throw new Error('Intervention note is required');
+    }
+
+    const rootTask = this.taskMap.get(rootTaskId);
+    if (!rootTask || rootTask.teamId !== team.id) {
+      throw new Error(`Collaborative root task not found: ${rootTaskId}`);
+    }
+
+    if (rootTask.status !== 'running') {
+      throw new Error('Only running collaborative root tasks can receive intervention');
+    }
+
+    const collaboration = rootTask.collaboration;
+    if (!collaboration?.enabled || collaboration.isRoot !== true) {
+      throw new Error('Task is not a collaborative root task');
+    }
+    if (collaboration.protocol !== 'native') {
+      throw new Error('Intervention API currently supports native-v2 goals only');
+    }
+    if (!collaboration.workspacePath) {
+      throw new Error('Missing workspace path for collaborative root task');
+    }
+    const waitDeadline = Date.now() + 2000;
+    while (this.nativeV2RunningGoals.has(collaboration.goalId) && Date.now() < waitDeadline) {
+      await waitMs(25);
+    }
+    if (this.nativeV2RunningGoals.has(collaboration.goalId)) {
+      throw new Error('Collaborative goal is currently executing; retry intervention shortly');
+    }
+
+    const loadedState = await loadNativeV2ExecutionState(collaboration.workspacePath);
+    if (!loadedState) {
+      throw new Error(`Native-v2 state file not found for goal ${collaboration.goalId}`);
+    }
+
+    const recoveredState = recoverNativeV2ExecutionState(loadedState);
+    if (
+      recoveredState.status !== 'blocked'
+      && !Object.values(recoveredState.nodes).some((entry) => entry.status === 'blocked')
+    ) {
+      throw new Error('Collaborative goal is not waiting for intervention');
+    }
+
+    const nextState = applyNativeV2Intervention(recoveredState, note);
+    await persistNativeV2ExecutionState(collaboration.workspacePath, nextState);
+    await appendNativeV2Event(collaboration.workspacePath, {
+      ts: nextState.updatedAt,
+      type: 'user-intervention',
+      details: {
+        note,
+      },
+    });
+
+    rootTask.collaboration = {
+      ...collaboration,
+      interventionRequired: false,
+      awaitingIntervention: false,
+      interventionMessage: undefined,
+      blockedNodeId: undefined,
+      lastInterventionAt: nextState.updatedAt,
+      interventionCount: (collaboration.interventionCount || 0) + 1,
+    };
+    rootTask.error = undefined;
+    rootTask.result = [
+      `Intervention accepted for collaborative goal: ${collaboration.goalId}`,
+      `Note: ${note}`,
+      'Resuming execution...',
+    ].join('\n');
+    this.emit('task-changed', { ...rootTask });
+
+    this.appendLog(team.id, {
+      level: 'info',
+      source: 'task',
+      message: `User intervention received for collaborative goal ${collaboration.goalId}`,
+      meta: {
+        goalId: collaboration.goalId,
+        rootTaskId: rootTask.id,
+        note,
+        engine: 'native-v2',
+      },
+    });
+    this.emitRuntimeSnapshot(team.id);
+
+    const resumePlan = this.buildNativeV2PlanFromState(nextState, rootTask);
+    void this.runCollaborativeGoalNativeV2(team, rootTask, resumePlan, nextState);
+    return { ...rootTask };
+  }
+
+  private async runCollaborativeGoalLegacy(
+    team: VirtualTeam,
+    rootTask: TeamTask,
+    plan: RoleCollaborationPlan,
+  ): Promise<void> {
     const collaboration = rootTask.collaboration;
     if (!collaboration) {
       throw new Error('Missing collaboration metadata on root goal task');
@@ -1230,6 +1878,9 @@ export class TeamOrchestrator extends EventEmitter {
           totalSteps: plan.interactions.length,
           workspacePath,
           roleSequence: plan.roleSequence,
+          interventionRequired: false,
+          awaitingIntervention: false,
+          interventionCount: 0,
         },
       };
 
