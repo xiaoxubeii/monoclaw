@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import { Card, CardContent } from '@/components/ui/card';
@@ -8,6 +8,7 @@ import type { OpsActionRecord, OpsEvent, OpsIpcResponse, OpsOverviewPayload, Ops
 import {
   OpsActionsList,
   OpsEventsList,
+  OpsSummaryPanel,
   OpsSubsystemGrid,
   formatOpsTime,
 } from './sections';
@@ -17,8 +18,12 @@ export function Ops() {
   const [opsStatus, setOpsStatus] = useState<OpsStatusPayload | null>(null);
   const [opsEvents, setOpsEvents] = useState<OpsEvent[]>([]);
   const [opsActions, setOpsActions] = useState<OpsActionRecord[]>([]);
+  const [loadingOps, setLoadingOps] = useState(false);
+  const [runningOpsCheck, setRunningOpsCheck] = useState(false);
+  const [updatingAutoRemediation, setUpdatingAutoRemediation] = useState(false);
 
-  const refreshOpsOverview = async () => {
+  const refreshOpsOverview = useCallback(async () => {
+    setLoadingOps(true);
     try {
       const [statusResp, eventsResp, actionsResp] = await Promise.all([
         window.electron.ipcRenderer.invoke('ops:status') as Promise<OpsIpcResponse<OpsStatusPayload>>,
@@ -35,12 +40,51 @@ export function Ops() {
       setOpsActions(actionsResp.success && actionsResp.data ? actionsResp.data : []);
     } catch (error) {
       toast.error(`${t('ops.toast.statusFailed')}: ${String(error)}`);
+    } finally {
+      setLoadingOps(false);
+    }
+  }, [t]);
+
+  const runOpsCheckNow = async () => {
+    setRunningOpsCheck(true);
+    try {
+      const response = await window.electron.ipcRenderer.invoke('ops:runCheckNow') as OpsIpcResponse<OpsOverviewPayload>;
+      if (!response.success || !response.data) {
+        throw new Error(response.error || 'Failed to run ops health check');
+      }
+
+      setOpsStatus(response.data.status);
+      setOpsEvents(Array.isArray(response.data.events) ? response.data.events : []);
+      setOpsActions(Array.isArray(response.data.actions) ? response.data.actions : []);
+      toast.success(t('ops.toast.checkSuccess'));
+    } catch (error) {
+      toast.error(`${t('ops.toast.checkFailed')}: ${String(error)}`);
+    } finally {
+      setRunningOpsCheck(false);
+    }
+  };
+
+  const toggleAutoRemediation = async (checked: boolean) => {
+    setUpdatingAutoRemediation(true);
+    try {
+      const channel = checked ? 'ops:resumeAutoRemediation' : 'ops:pauseAutoRemediation';
+      const response = await window.electron.ipcRenderer.invoke(channel) as OpsIpcResponse<OpsStatusPayload>;
+      if (!response.success || !response.data) {
+        throw new Error(response.error || 'Failed to update auto remediation');
+      }
+
+      setOpsStatus(response.data);
+      toast.success(checked ? t('ops.toast.resumeSuccess') : t('ops.toast.pauseSuccess'));
+    } catch (error) {
+      toast.error(`${t('ops.toast.toggleFailed')}: ${String(error)}`);
+    } finally {
+      setUpdatingAutoRemediation(false);
     }
   };
 
   useEffect(() => {
     void refreshOpsOverview();
-  }, []);
+  }, [refreshOpsOverview]);
 
   useEffect(() => {
     const unsubscribeUpdated = window.electron.ipcRenderer.on('ops:updated', (...args: unknown[]) => {
@@ -110,6 +154,16 @@ export function Ops() {
           </div>
         </CardContent>
       </Card>
+
+      <OpsSummaryPanel
+        opsStatus={opsStatus}
+        loadingOps={loadingOps || updatingAutoRemediation}
+        runningOpsCheck={runningOpsCheck}
+        autoRemediationEnabled={autoRemediationEnabled}
+        overallOpsStatus={overallOpsStatus}
+        onToggleAutoRemediation={(checked) => { void toggleAutoRemediation(checked); }}
+        onRunCheck={() => { void runOpsCheckNow(); }}
+      />
 
       <Tabs defaultValue="subsystems" className="space-y-4">
         <TabsList className="grid w-full grid-cols-3">

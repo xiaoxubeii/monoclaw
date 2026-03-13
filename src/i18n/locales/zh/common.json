@@ -24,7 +24,7 @@
     "workspace": "Monoclaw Workspace",
     "workspaceDescription": "对话、团队与日常运行",
     "controlPlane": "Control Plane",
-    "controlPlaneDescription": "Vault、频道、Operations 与设置"
+    "controlPlaneDescription": "Vault、Runtime、频道、Operations 与设置"
   },
   "actions": {
     "save": "保存",

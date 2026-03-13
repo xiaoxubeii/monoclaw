@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
+  Cpu,
   Database,
   ExternalLink,
   Home,
@@ -184,6 +185,7 @@ export function Sidebar() {
   const controlNavItems = [
     { to: APP_ROUTES.control.overview, icon: <Home className="h-5 w-5" />, label: t('sidebar.overview', 'Overview') },
     { to: APP_ROUTES.control.monoclawCore, icon: <Database className="h-5 w-5" />, label: t('sidebar.monoclawCore') },
+    { to: APP_ROUTES.control.runtimeManager, icon: <Cpu className="h-5 w-5" />, label: t('sidebar.runtimeManager', 'Runtime Manager') },
     { to: APP_ROUTES.control.channels, icon: <Radio className="h-5 w-5" />, label: t('sidebar.channels') },
     { to: APP_ROUTES.control.ops, icon: <ShieldCheck className="h-5 w-5" />, label: t('sidebar.intelligentOps') },
     { to: APP_ROUTES.control.settings, icon: <Settings className="h-5 w-5" />, label: t('sidebar.settings') },

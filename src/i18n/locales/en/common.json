@@ -24,7 +24,7 @@
     "workspace": "Monoclaw Workspace",
     "workspaceDescription": "Chat, teams, and everyday runs",
     "controlPlane": "Control Plane",
-    "controlPlaneDescription": "Vault, channels, operations, and settings"
+    "controlPlaneDescription": "Vault, runtime, channels, operations, and settings"
   },
   "actions": {
     "save": "Save",
