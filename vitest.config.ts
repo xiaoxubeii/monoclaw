@@ -18,6 +18,10 @@ export default defineConfig({
     alias: {
       '@': resolve(__dirname, 'src'),
       '@electron': resolve(__dirname, 'electron'),
+      '@mono/types': resolve(__dirname, 'packages/mono-types/src/index.ts'),
+      '@mono/identity': resolve(__dirname, 'packages/mono-identity/src/index.ts'),
+      '@mono/handshake': resolve(__dirname, 'packages/mono-handshake/src/index.ts'),
+      '@mono/protocol': resolve(__dirname, 'packages/mono-protocol/src/index.ts'),
     },
   },
 });

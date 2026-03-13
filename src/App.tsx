@@ -20,6 +20,7 @@ import { Teams } from './pages/Teams';
 import { Ops } from './pages/Ops';
 import { RuntimeManager } from './pages/OpenClawManager';
 import { MonoclawCore } from './pages/MonoclawCore';
+import { MonoConnect } from './pages/MonoConnect';
 import { useSettingsStore } from './stores/settings';
 import { useGatewayStore } from './stores/gateway';
 import { APP_ROUTES, LEGACY_ROUTE_REDIRECTS } from '@/lib/navigation';
@@ -164,6 +165,7 @@ function App() {
             <Route path={APP_ROUTES.workspace.automation} element={<Cron />} />
 
             <Route path={APP_ROUTES.control.overview} element={<Dashboard />} />
+            <Route path={APP_ROUTES.control.monoConnect} element={<MonoConnect />} />
             <Route path={APP_ROUTES.control.channels} element={<Channels />} />
             <Route path={APP_ROUTES.control.settings} element={<Settings />} />
             <Route path={`${APP_ROUTES.control.settings}/*`} element={<Settings />} />
@@ -172,6 +174,7 @@ function App() {
             <Route path={APP_ROUTES.control.runtimeManager} element={<RuntimeManager />} />
 
             <Route path="/dashboard" element={<Navigate to={LEGACY_ROUTE_REDIRECTS.dashboard} replace />} />
+            <Route path="/mono-connect" element={<Navigate to={LEGACY_ROUTE_REDIRECTS.monoConnect} replace />} />
             <Route path="/channels" element={<Navigate to={LEGACY_ROUTE_REDIRECTS.channels} replace />} />
             <Route path="/skills" element={<Navigate to={LEGACY_ROUTE_REDIRECTS.skills} replace />} />
             <Route path="/teams" element={<Navigate to={LEGACY_ROUTE_REDIRECTS.teams} replace />} />

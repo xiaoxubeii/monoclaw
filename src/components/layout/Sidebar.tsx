@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Sparkles,
   Terminal,
+  Waypoints,
   Trash2,
   Users2,
 } from 'lucide-react';
@@ -227,6 +228,7 @@ export function Sidebar() {
 
   const controlNavItems = [
     { to: APP_ROUTES.control.overview, icon: <Home className="h-5 w-5" />, label: t('sidebar.overview', 'Overview') },
+    { to: APP_ROUTES.control.monoConnect, icon: <Waypoints className="h-5 w-5" />, label: t('sidebar.monoConnect', 'Mono Connect') },
     { to: APP_ROUTES.control.monoclawCore, icon: <Database className="h-5 w-5" />, label: t('sidebar.monoclawCore') },
     { to: APP_ROUTES.control.runtimeManager, icon: <Cpu className="h-5 w-5" />, label: t('sidebar.runtimeManager', 'Runtime Manager') },
     { to: APP_ROUTES.control.channels, icon: <Radio className="h-5 w-5" />, label: t('sidebar.channels') },

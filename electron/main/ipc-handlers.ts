@@ -91,6 +91,7 @@ import {
   getAssistantDataLayout,
 } from '../utils/assistant-data-paths';
 import { checkManagedOpenClawDrift } from '../utils/assistant-openclaw-control';
+import { MonoConnectService } from '../mono/peer-service';
 
 /**
  * For custom/ollama providers, derive a unique key for OpenClaw config files
@@ -205,6 +206,7 @@ async function ensureLocalModelReadyForChat(localModelManager: LocalModelManager
 }
 
 let opsOrchestratorSingleton: OpsOrchestrator | null = null;
+let monoConnectServiceSingleton: MonoConnectService | null = null;
 
 function getOpsOrchestrator(
   gatewayManager: GatewayManager,
@@ -228,6 +230,13 @@ function getOpsOrchestrator(
   return opsOrchestratorSingleton;
 }
 
+function getMonoConnectService(): MonoConnectService {
+  if (!monoConnectServiceSingleton) {
+    monoConnectServiceSingleton = new MonoConnectService();
+  }
+  return monoConnectServiceSingleton;
+}
+
 /**
  * Register all IPC handlers
  */
@@ -249,6 +258,7 @@ export function registerIpcHandlers(
   };
   const teamOrchestrator = getTeamOrchestrator(teamGatewayRpc);
   const opsOrchestrator = getOpsOrchestrator(gatewayManager, teamOrchestrator, localModelManager);
+  const monoConnectService = getMonoConnectService();
 
   // Gateway handlers
   registerGatewayHandlers(gatewayManager, mainWindow, localModelManager);
@@ -294,6 +304,9 @@ export function registerIpcHandlers(
 
   // Usage handlers
   registerUsageHandlers();
+
+  // Mono connect handlers
+  registerMonoHandlers(monoConnectService);
 
   // Skill config handlers (direct file access, no Gateway RPC)
   registerSkillConfigHandlers();
@@ -2685,6 +2698,58 @@ function registerUsageHandlers(): void {
     return await getRecentTokenUsageHistory(safeLimit);
   });
 }
+
+function registerMonoHandlers(monoConnectService: MonoConnectService): void {
+  ipcMain.handle('mono:getStatus', async () => {
+    try {
+      return { success: true, data: await monoConnectService.getStatus() };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('mono:startListener', async (_, port?: number) => {
+    try {
+      return { success: true, data: await monoConnectService.startListener(port) };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('mono:stopListener', async () => {
+    try {
+      return { success: true, data: await monoConnectService.stopListener() };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('mono:createInvitation', async () => {
+    try {
+      return { success: true, data: await monoConnectService.createInvitation() };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('mono:connectWithInvitation', async (_, invitation: string) => {
+    try {
+      return { success: true, data: await monoConnectService.connectWithInvitation(invitation) };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcMain.handle('mono:revokeTrust', async (_, did: string) => {
+    try {
+      await monoConnectService.revokeTrust(did);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+}
+
 /**
  * Window control handlers (for custom title bar on Windows/Linux)
  */

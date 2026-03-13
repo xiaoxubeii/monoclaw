@@ -4,6 +4,16 @@ import electron from 'vite-plugin-electron';
 import renderer from 'vite-plugin-electron-renderer';
 import { resolve } from 'path';
 
+const monoAliases = {
+  '@mono/types': resolve(__dirname, 'packages/mono-types/src/index.ts'),
+  '@mono/identity': resolve(__dirname, 'packages/mono-identity/src/index.ts'),
+  '@mono/handshake': resolve(__dirname, 'packages/mono-handshake/src/index.ts'),
+  '@mono/protocol': resolve(__dirname, 'packages/mono-protocol/src/index.ts'),
+};
+
+// Ensure Electron launches in app mode during dev even if the shell exports this flag.
+delete process.env.ELECTRON_RUN_AS_NODE;
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
@@ -16,6 +26,9 @@ export default defineConfig({
           options.startup();
         },
         vite: {
+          resolve: {
+            alias: monoAliases,
+          },
           build: {
             outDir: 'dist-electron/main',
             rollupOptions: {
@@ -31,6 +44,9 @@ export default defineConfig({
           options.reload();
         },
         vite: {
+          resolve: {
+            alias: monoAliases,
+          },
           build: {
             outDir: 'dist-electron/preload',
             rollupOptions: {
@@ -46,6 +62,7 @@ export default defineConfig({
     alias: {
       '@': resolve(__dirname, 'src'),
       '@electron': resolve(__dirname, 'electron'),
+      ...monoAliases,
     },
   },
   server: {

@@ -24,7 +24,11 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@electron/*": ["electron/*"]
+      "@electron/*": ["electron/*"],
+      "@mono/types": ["packages/mono-types/src/index.ts"],
+      "@mono/identity": ["packages/mono-identity/src/index.ts"],
+      "@mono/handshake": ["packages/mono-handshake/src/index.ts"],
+      "@mono/protocol": ["packages/mono-protocol/src/index.ts"]
     }
   },
   "include": ["src"],

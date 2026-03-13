@@ -160,6 +160,13 @@ const electronAPI = {
         'openclaw:getSkillsDir',
         'openclaw:getCliCommand',
         'openclaw:doctor',
+        // Mono connect
+        'mono:getStatus',
+        'mono:startListener',
+        'mono:stopListener',
+        'mono:createInvitation',
+        'mono:connectWithInvitation',
+        'mono:revokeTrust',
         // Virtual teams
         'team:listTemplates',
         'team:list',

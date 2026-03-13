@@ -14,6 +14,7 @@ export const APP_ROUTES = {
   control: {
     root: '/control',
     overview: '/control/overview',
+    monoConnect: '/control/mono-connect',
     monoclawCore: '/control/monoclaw-core',
     runtimeManager: '/control/runtime-manager',
     channels: '/control/channels',
@@ -24,6 +25,7 @@ export const APP_ROUTES = {
 
 export const LEGACY_ROUTE_REDIRECTS = {
   dashboard: APP_ROUTES.control.overview,
+  monoConnect: APP_ROUTES.control.monoConnect,
   channels: APP_ROUTES.control.channels,
   skills: APP_ROUTES.workspace.skills,
   cron: APP_ROUTES.workspace.automation,
